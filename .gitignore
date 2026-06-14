@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.*
+
+# Default output directory of the tool
+vault/
+out/
+
+# Local scratch
+*.local
+tmp/

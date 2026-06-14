@@ -1,0 +1,42 @@
+{
+  "name": "ticktick-export",
+  "version": "0.1.0",
+  "description": "Export TickTick / 滴答清单 tasks to an Obsidian/Markdown vault, optionally enriched with attachment images via a local cookie-direct engine (macOS + Chrome only).",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "ticktick-export": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "node --import tsx --test src/test/*.test.ts"
+  },
+  "keywords": [
+    "ticktick",
+    "dida365",
+    "滴答清单",
+    "obsidian",
+    "export",
+    "markdown",
+    "csv"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
