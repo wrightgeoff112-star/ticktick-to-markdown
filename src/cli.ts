@@ -6,20 +6,26 @@
  *   ticktick-export <export.csv> [--out vault] [--with-images] [--host dida365|ticktick]
  */
 
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { CsvFormatError } from "./lib/csv.js";
 import { resolveHost } from "./lib/host.js";
 import { runExport } from "./lib/export.js";
 import { writeVault } from "./lib/fs.js";
+import { buildSortdayBundle } from "./lib/sortday-bundle.js";
+import { buildSortdayZipBuffer } from "./lib/sortday-zip.js";
 
 const TOOL_VERSION = "0.1.0";
+
+type OutputFormat = "vault" | "sortday" | "both";
 
 interface ParsedArgs {
   csvPath: string | null;
   out: string;
   withImages: boolean;
   host: string;
+  format: OutputFormat;
   help: boolean;
   version: boolean;
 }
@@ -41,6 +47,9 @@ OPTIONS
                         internal API — it may break at any time. Use at your own risk.
   --host <id>           dida365 (国内, default, images verified) or
                         ticktick (海外, EXPERIMENTAL — image path unverified).
+  --format <fmt>        vault (default, Obsidian/Markdown) | sortday (a single
+                        <out>.sortday.zip importable by Sortday's "导入数据" /
+                        Import) | both.
   -h, --help            Show this help.
   -v, --version         Show version.
 
@@ -59,6 +68,7 @@ EXAMPLES
   ticktick-export ./TickTick.csv
   ticktick-export ./TickTick.csv --out ~/Obsidian/TickTick
   ticktick-export ./滴答清单.csv --with-images
+  ticktick-export ./滴答清单.csv --with-images --format sortday   # -> vault.sortday.zip
   ticktick-export ./TickTick.csv --with-images --host ticktick   # experimental
 
 DISCLAIMER
@@ -73,6 +83,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     out: "vault",
     withImages: false,
     host: "dida365",
+    format: "vault",
     help: false,
     version: false,
   };
@@ -109,11 +120,22 @@ function parseArgs(argv: string[]): ParsedArgs {
         i += 1;
         break;
       }
+      case "--format": {
+        const value = argv[i + 1];
+        if (!value || value.startsWith("-")) {
+          throw new UsageError("--format 需要 vault|sortday|both / --format requires a value.");
+        }
+        out.format = parseFormat(value);
+        i += 1;
+        break;
+      }
       default:
         if (arg.startsWith("--out=")) {
           out.out = arg.slice("--out=".length);
         } else if (arg.startsWith("--host=")) {
           out.host = arg.slice("--host=".length);
+        } else if (arg.startsWith("--format=")) {
+          out.format = parseFormat(arg.slice("--format=".length));
         } else if (arg.startsWith("-")) {
           throw new UsageError(`未知参数 / unknown option: ${arg}`);
         } else if (out.csvPath === null) {
@@ -128,6 +150,15 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 class UsageError extends Error {}
+
+function parseFormat(value: string): OutputFormat {
+  if (value === "vault" || value === "sortday" || value === "both") {
+    return value;
+  }
+  throw new UsageError(
+    `未知 --format 值 / unknown --format: ${value}（vault|sortday|both）`,
+  );
+}
 
 async function main(): Promise<number> {
   let args: ParsedArgs;
@@ -170,7 +201,7 @@ async function main(): Promise<number> {
   const outDir = resolve(process.cwd(), args.out);
 
   try {
-    const { plan, csv } = await runExport({
+    const { plan, csv, attachmentsByTask } = await runExport({
       csvPath: resolve(process.cwd(), args.csvPath),
       host,
       withImages: args.withImages,
@@ -182,12 +213,38 @@ async function main(): Promise<number> {
       process.stderr.write(`提示 / Note: ${warning}\n`);
     }
 
-    await writeVault(outDir, plan);
+    const wantsVault = args.format === "vault" || args.format === "both";
+    const wantsSortday = args.format === "sortday" || args.format === "both";
+
+    if (wantsVault) {
+      await writeVault(outDir, plan);
+    }
+
+    let sortdayZipPath: string | null = null;
+    let sortdayBundle: ReturnType<typeof buildSortdayBundle> | null = null;
+    if (wantsSortday) {
+      sortdayBundle = buildSortdayBundle({
+        csv,
+        attachmentsByTask,
+      });
+      const buffer = await buildSortdayZipBuffer(sortdayBundle);
+      sortdayZipPath = `${outDir}.sortday.zip`;
+      await writeFile(sortdayZipPath, buffer);
+    }
 
     const { counts, gaps } = plan.manifest;
+    process.stdout.write(`\n完成 / Done.\n`);
+    if (wantsVault) {
+      process.stdout.write(`  Vault / 目录: ${outDir}\n`);
+    }
+    if (wantsSortday && sortdayZipPath && sortdayBundle) {
+      process.stdout.write(
+        `  Sortday 导入包 / import zip: ${sortdayZipPath}\n` +
+          `    (在 Sortday 设置 → 导入数据 选它)\n`,
+      );
+    }
     process.stdout.write(
-      `\n完成 / Done. 输出目录 / Output: ${outDir}\n` +
-        `  任务 / tasks: ${counts.tasks}\n` +
+      `  任务 / tasks: ${counts.tasks}\n` +
         `  清单 / projects: ${counts.projects}\n` +
         `  附件下载 / attachments downloaded: ${counts.attachmentsDownloaded}\n`,
     );

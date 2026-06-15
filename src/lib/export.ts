@@ -38,6 +38,8 @@ export interface ExportOptions {
 export interface ExportResult {
   plan: VaultPlan;
   csv: CsvParseResult;
+  /** Downloaded attachments grouped by CsvTask.sourceTaskId (for the SDX bundle). */
+  attachmentsByTask: Map<string, ResolvedAttachment[]>;
 }
 
 export async function runExport(options: ExportOptions): Promise<ExportResult> {
@@ -72,7 +74,7 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
     ...(options.now ? { now: options.now } : {}),
   });
 
-  return { plan, csv };
+  return { plan, csv, attachmentsByTask };
 }
 
 async function readCsv(csvPath: string): Promise<string> {

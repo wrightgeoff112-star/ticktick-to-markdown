@@ -101,8 +101,22 @@ ticktick-export <export.csv> [options]
 | `--out <dir>` | Output vault directory. Default `./vault`. |
 | `--with-images` | Also fetch attachment images (macOS + Chrome + dida365 only). |
 | `--host <id>` | `dida365` (国内, default, **verified**) or `ticktick` (海外, **experimental**). |
+| `--format <fmt>` | `vault` (default, Obsidian/Markdown) · `sortday` (a single `<out>.sortday.zip`) · `both`. |
 | `-h, --help` | Show help. |
 | `-v, --version` | Show version. |
+
+#### Import into Sortday
+
+`--format sortday` writes a single `<out>.sortday.zip` (the Sortday SDX format —
+fresh local ids, structured fields, and downloaded images as `<sd-attachment>`
+nodes). In Sortday open **设置 → 导入数据 / Settings → Import data** and pick that
+zip; everything (tasks, notes, lists, images) lands as plain local data — no
+account link, no per-image lazy loading, no dependency on this tool afterwards.
+
+```bash
+ticktick-export ./滴答清单.csv --with-images --format sortday
+# -> vault.sortday.zip   (open it in Sortday → 导入数据)
+```
 
 ### Examples
 
