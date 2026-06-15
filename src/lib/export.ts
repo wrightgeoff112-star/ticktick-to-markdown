@@ -9,14 +9,16 @@
 import { readFile } from "node:fs/promises";
 import { platform } from "node:os";
 
-import { parseDidaCsv, type CsvParseResult } from "./csv.js";
+import { parseDidaCsv, type CsvParseResult, type CsvTask } from "./csv.js";
 import type { HostConfig } from "./host.js";
 import {
+  attachmentsFromTaskRecord,
   downloadAttachmentBytes,
-  fetchTaskAttachments,
+  fetchCompletedTasksInWindow,
   loadEngineSnapshot,
   ImageEngineError,
   type CookieMap,
+  type RawRecord,
 } from "./image-engine.js";
 import type { ManifestGap } from "./manifest.js";
 import { buildVault, type ResolvedAttachment, type VaultPlan } from "./vault.js";
@@ -126,57 +128,138 @@ async function enrichWithImages(
       ...(options.loadCookies ? { loadCookies: options.loadCookies } : {}),
     });
 
-    log(`已连接，发现 ${snapshot.projects.length} 个项目，开始逐任务取图…`);
+    log(`已连接，发现 ${snapshot.projects.length} 个项目，开始取图…`);
 
-    let downloaded = 0;
+    // CSV's `taskId` is an export-local index, not the backend id, so we can't
+    // fetch tasks by it. Instead: resolve each image task's projectId from its
+    // list name, then within each project match by TITLE against the project's
+    // open + completed task records (which already carry their attachments).
+    const projectIdByName = new Map<string, string>();
+    for (const project of snapshot.projects) {
+      projectIdByName.set(project.name.trim(), project.id);
+    }
+    const listTitleById = new Map(csv.lists.map((l) => [l.id, l.title]));
+    const normTitle = (t: unknown) => String(t ?? "").trim();
+
+    // Group image-bearing CSV tasks by resolved projectId.
+    const imageTasksByProject = new Map<string, CsvTask[]>();
     for (const task of csv.tasks) {
       if (!task.sourceTaskId) continue;
-      // Only spend network on tasks whose note actually references an image.
       if (task.attachmentRefs.length === 0) continue;
-
-      const metas = await fetchTaskAttachments(snapshot, task.sourceTaskId);
-      if (metas.length === 0) {
+      const listTitle = task.listId ? listTitleById.get(task.listId) : null;
+      const projectId =
+        snapshot.projectIdByTaskId.get(task.sourceTaskId) ??
+        (listTitle ? projectIdByName.get(listTitle.trim()) : undefined);
+      if (!projectId) {
         gaps.push({
           code: "task_attachment_unreachable",
-          message:
-            "任务在内部接口中不可达（常见原因：已完成任务超出时间窗 limit=100，或不在初始同步批次中），未能取到其附件。",
+          message: `无法把任务「${task.title}」的清单「${listTitle ?? "?"}」对应到账号里的项目，未取图。`,
           taskId: task.id,
         });
         continue;
       }
+      const list = imageTasksByProject.get(projectId);
+      if (list) list.push(task);
+      else imageTasksByProject.set(projectId, [task]);
+    }
 
-      const resolved: ResolvedAttachment[] = [];
-      for (const meta of metas) {
-        try {
-          const bytes = await downloadAttachmentBytes(snapshot, meta);
-          resolved.push({
-            id: meta.id,
-            taskId: task.sourceTaskId,
-            name: meta.name,
-            type: meta.type,
-            ...(meta.size != null ? { size: meta.size } : {}),
-            bytes,
-          });
-          downloaded += 1;
-        } catch (error) {
-          gaps.push({
-            code: "attachment_download_failed",
-            message: `附件下载失败：${meta.name}（${error instanceof Error ? error.message : String(error)}）`,
-            taskId: task.id,
-            attachmentId: meta.id,
-          });
-          resolved.push({
-            id: meta.id,
-            taskId: task.sourceTaskId,
-            name: meta.name,
-            type: meta.type,
-            ...(meta.size != null ? { size: meta.size } : {}),
-            bytes: null,
-          });
-        }
+    let downloaded = 0;
+    for (const [projectId, tasks] of imageTasksByProject) {
+      // Title -> task record index for this project. Seed with open tasks; then
+      // lazily pull ±168h completed windows around each task's completion time
+      // (cached per day), with a cross-project global-completed fallback.
+      const recordByTitle = new Map<string, RawRecord>();
+      const addRecord = (rec: RawRecord) => {
+        const key = normTitle(rec.title);
+        if (key && !recordByTitle.has(key)) recordByTitle.set(key, rec);
+      };
+      for (const rec of snapshot.openTasksByProject.get(projectId) ?? []) {
+        addRecord(rec);
       }
-      if (resolved.length > 0) {
-        attachmentsByTask.set(task.sourceTaskId, resolved);
+      const fetchedWindows = new Set<string>();
+
+      for (const task of tasks) {
+        const sourceTaskId = task.sourceTaskId;
+        if (!sourceTaskId) continue;
+        const titleKey = normTitle(task.title);
+
+        if (!recordByTitle.has(titleKey)) {
+          const center =
+            task.completedTime ?? task.dueDate ?? task.startDate ?? null;
+          if (center) {
+            const day = center.slice(0, 10);
+            const projKey = `p:${day}`;
+            if (!fetchedWindows.has(projKey)) {
+              fetchedWindows.add(projKey);
+              const win = await fetchCompletedTasksInWindow(
+                snapshot,
+                projectId,
+                center,
+              );
+              for (const rec of win) addRecord(rec);
+            }
+            if (!recordByTitle.has(titleKey)) {
+              const globalKey = `g:${day}`;
+              if (!fetchedWindows.has(globalKey)) {
+                fetchedWindows.add(globalKey);
+                const gwin = await fetchCompletedTasksInWindow(
+                  snapshot,
+                  projectId,
+                  center,
+                  { global: true },
+                );
+                for (const rec of gwin) addRecord(rec);
+              }
+            }
+          }
+        }
+
+        const rec = recordByTitle.get(titleKey);
+        const metas = rec ? attachmentsFromTaskRecord(snapshot, rec) : [];
+        if (metas.length === 0) {
+          gaps.push({
+            code: "task_attachment_unreachable",
+            message: rec
+              ? `任务「${task.title}」在账号里没有可下载的附件（可能图片已删除）。`
+              : `在项目里按标题没找到任务「${task.title}」，未取图。`,
+            taskId: task.id,
+          });
+          continue;
+        }
+
+        const resolved: ResolvedAttachment[] = [];
+        for (const meta of metas) {
+          try {
+            const bytes = await downloadAttachmentBytes(snapshot, meta);
+            resolved.push({
+              id: meta.id,
+              taskId: sourceTaskId,
+              name: meta.name,
+              type: meta.type,
+              ...(meta.size != null ? { size: meta.size } : {}),
+              bytes,
+            });
+            downloaded += 1;
+          } catch (error) {
+            gaps.push({
+              code: "attachment_download_failed",
+              message: `附件下载失败：${meta.name}（${error instanceof Error ? error.message : String(error)}）`,
+              taskId: task.id,
+              attachmentId: meta.id,
+            });
+            resolved.push({
+              id: meta.id,
+              taskId: sourceTaskId,
+              name: meta.name,
+              type: meta.type,
+              ...(meta.size != null ? { size: meta.size } : {}),
+              bytes: null,
+            });
+          }
+        }
+        if (resolved.length > 0) {
+          attachmentsByTask.set(sourceTaskId, resolved);
+        }
       }
     }
 

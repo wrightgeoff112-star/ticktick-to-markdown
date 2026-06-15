@@ -70,7 +70,7 @@ export class ImageEngineError extends Error {
   }
 }
 
-type RawRecord = Record<string, unknown>;
+export type RawRecord = Record<string, unknown>;
 
 type DidaFetchAttempt = {
   url: string;
@@ -389,6 +389,8 @@ export interface EngineSnapshot {
   projects: EngineProject[];
   /** taskId -> projectId, for open tasks present in the initial batch sync. */
   projectIdByTaskId: Map<string, string>;
+  /** projectId -> full open-task records (with title + attachments) from the batch. */
+  openTasksByProject: Map<string, RawRecord[]>;
 }
 
 export interface LoadSnapshotOptions {
@@ -438,13 +440,94 @@ export async function loadEngineSnapshot(
     : [];
 
   const projectIdByTaskId = new Map<string, string>();
+  const openTasksByProject = new Map<string, RawRecord[]>();
   for (const task of openTasks) {
     if (typeof task.id === "string" && typeof task.projectId === "string") {
       projectIdByTaskId.set(task.id, task.projectId);
+      const list = openTasksByProject.get(task.projectId);
+      if (list) list.push(task);
+      else openTasksByProject.set(task.projectId, [task]);
     }
   }
 
-  return { cookies, host, fetchImpl, projects, projectIdByTaskId };
+  return {
+    cookies,
+    host,
+    fetchImpl,
+    projects,
+    projectIdByTaskId,
+    openTasksByProject,
+  };
+}
+
+const COMPLETED_WINDOW_HOURS = 168;
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/**
+ * Dida's /completed/ endpoint wants `from`/`to` as `YYYY-MM-DD HH:MM:SS` in UTC
+ * (space pre-encoded as %20, NO timezone). Using a raw ISO string here is
+ * silently ignored by the server (which is why descending-cursor pagination
+ * looked stuck and only returned the most recent page).
+ */
+function formatCompletedWindowPart(date: Date): string {
+  return (
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}` +
+    `%20${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`
+  );
+}
+
+/**
+ * Fetch completed tasks in a ±168h window around `centerIso` (the task's own
+ * completedTime). The CSV `taskId` is an export-local index, not the backend
+ * id, so archived/completed tasks (the bulk of real accounts) are recovered by
+ * targeting their completion time and matching on title. Completed records
+ * already include their `attachments`, so no extra per-task fetch is needed.
+ * Set `global` to query /project/all/completed (cross-project fallback).
+ */
+export async function fetchCompletedTasksInWindow(
+  snapshot: EngineSnapshot,
+  projectId: string,
+  centerIso: string,
+  options: { windowHours?: number; global?: boolean } = {},
+): Promise<RawRecord[]> {
+  const center = new Date(centerIso);
+  if (Number.isNaN(center.getTime())) return [];
+  const windowMs = (options.windowHours ?? COMPLETED_WINDOW_HOURS) * 3600 * 1000;
+  const from = formatCompletedWindowPart(new Date(center.getTime() - windowMs));
+  const to = formatCompletedWindowPart(new Date(center.getTime() + windowMs));
+  const path = options.global
+    ? `/api/v2/project/all/completed?from=${from}&to=${to}&limit=100`
+    : `/api/v2/project/${projectId}/completed/?from=${from}&to=${to}&limit=100`;
+
+  try {
+    const res = await fetchJson(
+      path,
+      snapshot.cookies,
+      snapshot.host,
+      snapshot.fetchImpl,
+    );
+    return Array.isArray(res)
+      ? (res as RawRecord[])
+      : res && typeof res === "object" && Array.isArray((res as RawRecord).tasks)
+        ? ((res as RawRecord).tasks as RawRecord[])
+        : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Extract downloadable attachments from a raw task record (open or completed). */
+export function attachmentsFromTaskRecord(
+  snapshot: EngineSnapshot,
+  task: RawRecord,
+): EngineAttachment[] {
+  const taskId = typeof task.id === "string" ? task.id : "";
+  const projectId = typeof task.projectId === "string" ? task.projectId : "";
+  if (!taskId || !projectId) return [];
+  return normalizeAttachments(task.attachments, snapshot.host, taskId, projectId);
 }
 
 /**

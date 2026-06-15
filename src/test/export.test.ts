@@ -53,27 +53,33 @@ test("--with-images with injected engine downloads and links an attachment", asy
   await withTempCsv(async (csvPath) => {
     const pngBytes = Buffer.from("FAKEPNG");
 
+    // The CSV taskId ("task-1") is an export-local index, not the backend id,
+    // so the engine recovers the task by TITLE from the ±168h completed window.
+    const completedTask = {
+      id: "backend-task-1",
+      projectId: "p1",
+      title: "Ship v1",
+      attachments: [
+        {
+          id: "att-1",
+          fileName: "diagram.png",
+          contentType: "image/png",
+          size: pngBytes.length,
+          url: "https://api.dida365.com/download/att-1",
+        },
+      ],
+    };
     const fetchImpl: typeof fetch = (async (input: unknown) => {
       const url = typeof input === "string" ? input : String(input);
 
       if (url.includes("/api/v2/batch/check/0")) {
         return jsonResponse({
           projectProfiles: [{ id: "p1", name: "Roadmap" }],
-          syncTaskBean: { update: [{ id: "task-1", projectId: "p1" }] },
+          syncTaskBean: { update: [] },
         });
       }
-      if (url.includes("/api/v2/project/p1/task/task-1")) {
-        return jsonResponse({
-          attachments: [
-            {
-              id: "att-1",
-              fileName: "diagram.png",
-              contentType: "image/png",
-              size: pngBytes.length,
-              url: "https://api.dida365.com/download/att-1",
-            },
-          ],
-        });
+      if (url.includes("/completed")) {
+        return jsonResponse([completedTask]);
       }
       if (url.includes("/download/att-1")) {
         return new Response(pngBytes, { status: 200 });
