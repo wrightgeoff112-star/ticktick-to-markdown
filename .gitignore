@@ -12,3 +12,6 @@ out/
 # Local scratch
 *.local
 tmp/
+
+# Internal design notes — not published. Location pointer in docs/README.md
+/docs/

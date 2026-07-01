@@ -4,6 +4,15 @@
   "description": "Export TickTick / 滴答清单 tasks to an Obsidian/Markdown vault, optionally enriched with attachment images via a local cookie-direct engine (macOS + Chrome only).",
   "type": "module",
   "license": "MIT",
+  "author": "ticktick-export contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wrightgeoff112-star/ticktick-to-markdown.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wrightgeoff112-star/ticktick-to-markdown/issues"
+  },
+  "homepage": "https://github.com/wrightgeoff112-star/ticktick-to-markdown#readme",
   "bin": {
     "ticktick-export": "./dist/cli.js"
   },
@@ -33,6 +42,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

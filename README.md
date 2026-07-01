@@ -5,6 +5,8 @@ Export your **TickTick / 滴答清单** tasks into an **Obsidian / Markdown vaul
 - **Default mode** — uses only the official CSV export. Cross-platform, no images, fully compliant.
 - **`--with-images` mode** — additionally pulls attachment images via a local cookie-direct engine. **macOS + Chrome + dida365 only**, and it talks to TickTick's **unofficial internal API**. Use at your own risk.
 
+Ships as both a **Node CLI** and a **Chrome extension** ([`extension/`](extension/)) — both share the same core logic in `src/lib`.
+
 > 中文说明见下方 [中文文档](#中文文档)。
 
 ---
@@ -163,10 +165,31 @@ and records the reason in `manifest.json`.
 
 ## Disclaimer
 
-This is an independent, unofficial tool. The default mode uses only the official
-CSV export. The `--with-images` mode uses an unofficial internal API and reads
-your local browser cookie. It is provided **as is**, without warranty, under the
-MIT license. Use at your own risk.
+This is an **independent, unofficial tool, not affiliated with or endorsed by
+TickTick / 滴答清单**.
+
+- **Default (CSV-only) mode** uses only the official CSV export and is fully
+  compliant.
+- **`--with-images` mode** talks to TickTick's **undocumented internal web API**
+  (`/api/v2` / `/api/v1`) using your own local Chrome cookie. These endpoints
+  **are not guaranteed to exist**: TickTick may rename fields, change paths, add
+  signatures, or remove them at any time, in which case image fetching silently
+  falls back to a no-image vault.
+- **Personal data only.** The tool only ever reads *your own* login session and
+  *your own* data. It must never be used to access other people's accounts or to
+  scrape public/shared content.
+- **Terms of Service.** Automated access to internal endpoints may conflict with
+  TickTick's Terms of Service. You are responsible for your own use.
+- **Do not commercialize this path.** Keeping it personal / open-source / free
+  keeps the practical risk very low; charging money raises the risk materially.
+- Provided **as is, without warranty**, under the MIT license. **Use at your own
+  risk.**
+
+---
+
+## License
+
+MIT © ticktick-export contributors. See [LICENSE](LICENSE).
 
 ---
 
@@ -223,4 +246,13 @@ ticktick-export <导出的.csv> [选项]
 
 ### 免责声明
 
-独立的非官方工具。默认档只用官方 CSV；`--with-images` 用的是非官方内部接口并读取本地浏览器 cookie。按 MIT 协议「按原样」提供，不作任何担保，**风险自负**。
+**本工具独立开发，与 TickTick / 滴答清单无任何隶属或关联，未获其授权。**
+
+- **默认档**只用官方导出的 CSV，完全合规。
+- **`--with-images` 档**用你自己的 Chrome 登录态调用滴答**未公开的内部接口**（`/api/v2`、`/api/v1`）。这些接口**不保证长期存在**：滴答随时可能改字段名、改路径、加签名或下线，届时取图会**静默回退为无图**导出。
+- **仅限导出本人数据**。工具只读取你自己的登录态、你自己的数据，严禁用于访问他人账号或抓取公开 / 共享内容。
+- **服务条款**：自动访问内部接口可能与滴答的用户协议冲突，使用风险由你自己承担。
+- **不要用于商用**。保持个人自用 / 开源 / 免费，实际风险很低；一旦收费，风险会显著上升。
+- 按 MIT 协议「按原样」提供，不作任何担保，**风险自负**。
+
+浏览器扩展见 [`extension/`](extension/)（跨平台、无需 Keychain，用 `chrome.cookies` 取登录态）。
