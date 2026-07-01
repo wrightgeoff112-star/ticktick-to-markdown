@@ -1,258 +1,170 @@
-# ticktick-export
+# 滴答清单 → Markdown
 
-Export your **TickTick / 滴答清单** tasks into an **Obsidian / Markdown vault** — optionally enriched with attachment images.
+> **滴答能导出 CSV，但任务里的图片和附件全丢了。这个工具把它们一起搬走。**
 
-- **Default mode** — uses only the official CSV export. Cross-platform, no images, fully compliant.
-- **`--with-images` mode** — additionally pulls attachment images via a local cookie-direct engine. **macOS + Chrome + dida365 only**, and it talks to TickTick's **unofficial internal API**. Use at your own risk.
+滴答清单 / TickTick 的官方导出只给一份 CSV——任务文字能带走，**图片、附件一律不导出**；官方 OpenAPI 同样拿不到附件。想迁到 Obsidian / Notion 或本地归档，图就没了。
 
-Ships as both a **Node CLI** and a **Chrome extension** ([`extension/`](extension/)) — both share the same core logic in `src/lib`.
+本工具补上这一块：把任务**连同附件图片**，导出成结构化的 Markdown 笔记库。
 
-> 中文说明见下方 [中文文档](#中文文档)。
+## ✨ 它能做什么
 
----
+- 🖼️ **救回图片** —— 任务里的附件图片一并下载、按任务归档（官方导出和 API 都做不到）
+- 📝 **结构化笔记** —— 每个任务一个 `.md`，YAML 元信息（创建/截止/完成时间、优先级、重复、标签、提醒、**父子任务**、**文件夹**）+ 原始正文
+- 🗂️ **诚实清单** —— `manifest.json` 记录每一项的落盘路径，**并如实标注哪些没拿到**
+- 🔌 **两种入口** —— 命令行（批量归档）+ Chrome 扩展（一键导出），共用同一套核心逻辑
 
-## What you get
+## 两种用法
 
-Run it against your CSV and you get a vault directory:
+| | 命令行 CLI | Chrome 扩展 ([`extension/`](extension/)) |
+| --- | --- | --- |
+| 取图 | macOS + Chrome（读本地 cookie） | 任意系统 + Chrome 登录 |
+| 出口 | 写本地文件夹 | 浏览器下载 zip |
+| 适合 | 批量、自动化 | 不装 Node、一键搞定 |
+
+> 也支持**纯 CSV 模式**（不带图）——全平台、零依赖、完全合规。
+
+## 快速开始（CLI）
+
+需要 Node.js ≥ 18。CSV 怎么拿：滴答网页端 **设置 → 导出 / 备份**。
+
+```bash
+npm install
+
+# 直接跑（无需 build）—— 只要文字（全平台、无图）
+npm run dev -- ./TickTick.csv
+
+# 文字 + 图片（需 macOS + Chrome 登录 dida365）
+npm run dev -- ./滴答清单.csv --with-images
+
+# 或编译后跑
+npm run build && node dist/cli.js ./TickTick.csv --out ~/Obsidian/滴答
+```
+
+| 选项 | 说明 |
+| --- | --- |
+| `--out <dir>` | 输出目录，默认 `./vault` |
+| `--with-images` | 额外取附件图片（仅 macOS + Chrome + dida365） |
+| `--host <id>` | `dida365`（国内，默认，**已验证**）/ `ticktick`（海外，**实验性**） |
+
+## 产出长什么样
 
 ```
 vault/
-├── <List Name>/
-│   └── <Task Title>.md      # one file per task: YAML frontmatter + body
+├── <清单名>/
+│   └── <任务标题>.md      # 每个任务一个文件：YAML frontmatter + 正文
 ├── attachments/
-│   └── <attachmentId>.<ext> # downloaded bytes (only with --with-images)
-└── manifest.json            # machine-readable source of truth
+│   └── <附件id>.<ext>     # 图片字节（仅 --with-images）
+└── manifest.json          # 机读真值：路径映射 + 缺口清单
 ```
 
-Each task markdown file looks like:
+单个任务文件：
 
 ```markdown
 ---
 id: dida-task-1
-sourceTaskId: task-1
-kind: task
-status: todo
+folder: Work
 list: Roadmap
+status: todo
 priority: 3
 start: 2026-06-10T01:00:00.000Z
 due: 2026-06-12T10:00:00.000Z
+created: 2026-06-01T00:00:00.000Z
 allDay: false
 timezone: Asia/Shanghai
 tags: [release, urgent]
-repeat: "RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO"
-repeatStatus: parsed
-reminders: [-PT30M]
+repeat: "RRULE:FREQ=WEEKLY;BYDAY=MO"
 ---
 
 # Ship v1
 
-Need to attach the diagram
+下面这张图也一起搬过来了：
 ![](attachments/att-9.png)
 ```
 
-The body keeps your original note; image references are rewritten to relative
-`attachments/...` paths **only** for images that were actually downloaded.
+正文里的图片引用会被改写成本地相对路径——**只对真正下载到的图片改写**，没拿到的保持原样，并在 manifest 里记一笔。下游工具（比如导回另一个 App）应读 `manifest.json`，不要反向解析 markdown。
 
-### `manifest.json` — the stable contract
+## 图片是怎么抓到的（以及为什么有风险）
 
-`manifest.json` is the machine-readable source of truth. Downstream tools (for
-example a re-import into another app) should **read the manifest and never
-reverse-parse the markdown**. It contains:
+`--with-images` 复刻了一个登录浏览器做的事：
 
-- `schemaVersion` — bump-on-break version of the manifest format.
-- `source` — host, csv path, whether images were requested, whether the host's
-  image path is verified.
-- `counts` — tasks / projects / attachments / attachments downloaded.
-- `projects`, `tasks`, `attachments` — with their on-disk file paths.
-- `gaps` — **an honest list of what could NOT be captured**, with stable
-  machine codes, e.g.:
-  - `images_disabled` — default mode, no images requested.
-  - `images_skipped_not_macos` — `--with-images` requested off macOS.
-  - `images_skipped_overseas_unverified` — `--host ticktick` image path unverified.
-  - `image_engine_failed` — cookie/login/network failure; fell back to no-images.
-  - `task_attachment_unreachable` — task not reachable via the internal API
-    (commonly: a completed task outside the `limit=100` time window).
-  - `attachment_download_failed` — metadata found but byte download failed.
+1. 从 **macOS 钥匙串**读 Chrome 的加密密钥；
+2. 解密 Chrome 的 cookie 库，恢复你的登录态；
+3. 用这个 cookie 调滴答的**内部 `/api/v2` 接口**，枚举任务、读附件元信息；
+4. 再发一个带认证的请求下载每张图的字节。
 
----
+> Chrome 扩展走同样的接口，但用 `chrome.cookies` 拿登录态——所以扩展端不限 macOS，只要在浏览器里登过就行。
 
-## Install & run
+⚠️ 这用的是**未公开的内部接口**，滴答随时可能改字段 / 改路径 / 加签名，**随时可能失效**。任何一步失败，工具会**静默回退为无图导出**，并把原因写进 manifest。详见下方免责声明。
 
-Requires Node.js ≥ 18.
+## 支持矩阵
 
-```bash
-npm install
-npm run build          # compiles to dist/
-
-# or run directly without building:
-npx tsx src/cli.ts <export.csv>
-```
-
-### Get your CSV
-
-In the **TickTick / 滴答 web app**: **Settings → Export (设置 → 导出 / 备份)** and download the CSV. This is the official, supported, cross-platform data source.
-
-### Usage
-
-```bash
-ticktick-export <export.csv> [options]
-```
-
-| Option | Description |
-| --- | --- |
-| `--out <dir>` | Output vault directory. Default `./vault`. |
-| `--with-images` | Also fetch attachment images (macOS + Chrome + dida365 only). |
-| `--host <id>` | `dida365` (国内, default, **verified**) or `ticktick` (海外, **experimental**). |
-| `-h, --help` | Show help. |
-| `-v, --version` | Show version. |
-
-### Examples
-
-```bash
-# Default: cross-platform, no images
-ticktick-export ./TickTick.csv
-
-# Into an Obsidian vault folder
-ticktick-export ./TickTick.csv --out ~/Obsidian/TickTick
-
-# With images (macOS + Chrome, logged into dida365)
-ticktick-export ./滴答清单.csv --with-images
-
-# Overseas, experimental image path (may not work at all)
-ticktick-export ./TickTick.csv --with-images --host ticktick
-```
-
----
-
-## Support matrix
-
-| Capability | dida365 (国内) | ticktick (海外) |
+| 能力 | dida365（国内） | ticktick（海外） |
 | --- | --- | --- |
-| CSV → markdown vault (default) | ✅ cross-platform | ✅ cross-platform |
-| `--with-images` on macOS + Chrome | ✅ verified | ⚠️ **experimental, unverified** |
-| `--with-images` on Windows / Linux | ❌ (gap recorded) | ❌ (gap recorded) |
+| CSV → Markdown（默认档） | ✅ 全平台 | ✅ 全平台 |
+| `--with-images`（macOS + Chrome） | ✅ 已验证 | ⚠️ 实验性、未验证 |
+| `--with-images`（Windows / Linux CLI） | ❌ 记缺口 | ❌ 记缺口 |
+| 扩展取图（任意系统 + Chrome） | ✅ | ⚠️ 实验性 |
 
-- The **default (CSV-only) mode works everywhere** and needs nothing but the CSV.
-- Images require **macOS + Google Chrome** with an active login, because the
-  engine reads and decrypts Chrome's cookie via the macOS Keychain.
-- The `ticktick` (overseas) image path is **untested**: domains, cookie domains,
-  CSRF behaviour and attachment endpoints may differ. It may simply not work,
-  in which case a gap is recorded and you still get the full no-image vault.
-- Even on the supported path, **completed tasks may be incomplete**: the internal
-  API only returns recent completed tasks (a `limit=100` time window), so older
-  done tasks' images may be unreachable. These misses are listed in `manifest.json`.
+即便在已验证路径上，**已完成任务的图也可能不全**：内部接口只回最近一段时间完成的任务（`limit=100` 时间窗），更早的抓不到——这些缺口都会列在 manifest 里，不撒谎。
 
----
+## 免责声明
 
-## How the image engine works (and why it's risky)
+**本工具独立开发，与 TickTick / 滴答清单无任何隶属或关联，未获其授权。**
 
-`--with-images` reproduces what a logged-in browser does:
-
-1. Reads the **Chrome Safe Storage** password from the **macOS Keychain**.
-2. Decrypts Chrome's cookie database (`PBKDF2(saltysalt, 1003, sha1)` →
-   `AES-128-CBC`) to recover your login cookie.
-3. Calls TickTick's **internal `/api/v2` web endpoints** with that cookie to
-   enumerate projects and tasks and read attachment metadata.
-4. Performs a second authenticated `GET` to download each attachment's bytes.
-
-This uses **undocumented, unofficial internal APIs** that are not endorsed by
-TickTick / 滴答 and **may break or change at any time**. Nothing is sent
-anywhere except to TickTick's own servers, but **you are solely responsible**
-for any use. If anything fails, the tool degrades gracefully to a no-image vault
-and records the reason in `manifest.json`.
-
----
-
-## Disclaimer
-
-This is an **independent, unofficial tool, not affiliated with or endorsed by
-TickTick / 滴答清单**.
-
-- **Default (CSV-only) mode** uses only the official CSV export and is fully
-  compliant.
-- **`--with-images` mode** talks to TickTick's **undocumented internal web API**
-  (`/api/v2` / `/api/v1`) using your own local Chrome cookie. These endpoints
-  **are not guaranteed to exist**: TickTick may rename fields, change paths, add
-  signatures, or remove them at any time, in which case image fetching silently
-  falls back to a no-image vault.
-- **Personal data only.** The tool only ever reads *your own* login session and
-  *your own* data. It must never be used to access other people's accounts or to
-  scrape public/shared content.
-- **Terms of Service.** Automated access to internal endpoints may conflict with
-  TickTick's Terms of Service. You are responsible for your own use.
-- **Do not commercialize this path.** Keeping it personal / open-source / free
-  keeps the practical risk very low; charging money raises the risk materially.
-- Provided **as is, without warranty**, under the MIT license. **Use at your own
-  risk.**
-
----
+- **默认档**只用官方 CSV，完全合规。
+- **`--with-images`** 用你自己的登录态调滴答**未公开内部接口**，随时可能失效，届时静默回退为无图。
+- **仅限导出本人数据**，严禁访问他人账号或抓取公开内容。
+- 自动访问内部接口可能与滴答服务条款冲突，风险自负。
+- **请勿商用**——保持个人 / 开源 / 免费，实际风险很低；一旦收费风险显著上升。
+- 按 MIT 协议「按原样」提供，**不作任何担保**。
 
 ## License
 
 MIT © ticktick-export contributors. See [LICENSE](LICENSE).
 
----
-
-## Development
+## 开发
 
 ```bash
 npm install
-npm run typecheck   # tsc --noEmit
-npm test            # node --test (no images / network required)
-npm run build       # emit dist/
+npm run typecheck        # tsc --noEmit
+npm test                 # 离线测试，无需登录 / 网络
+npm run build            # 编译 CLI → dist/
+npm run build:extension  # 打包浏览器扩展 → extension/popup.js
 ```
 
-Tests cover the CSV parser, the vault/manifest builder, the export orchestrator
-(with an injected fetch + cookie loader, so the `--with-images` path is exercised
-offline), and the Chrome cookie decryption round-trip.
+测试覆盖：CSV 解析、vault / manifest 构造、导出编排（注入 fetch + cookie loader，离线跑通取图链）、Chrome cookie 解密往返。
 
 ---
 
-## 中文文档
+## English
 
-把 **滴答清单 / TickTick** 的任务导出成 **Obsidian / Markdown 知识库**，可选带图。
+*TickTick's official export is CSV-only — **images and attachments are dropped**. This tool brings them along into a Markdown vault (Obsidian-ready).*
 
-### 两档模式
+**Why this exists.** TickTick / 滴答清单 only exports a CSV: task text comes out, but **images and attachments are stripped**, and the official OpenAPI has no attachment access either. This tool fills that gap — tasks **with their attachment images**, as a structured Markdown vault.
 
-- **默认档**：只用官方导出的 CSV。**跨平台、合规、无图**，任何系统都能跑。
-- **`--with-images` 档**：在 CSV 之上，用 cookie 直连引擎补图。**仅 macOS + Chrome + dida365**，且使用的是滴答**非官方内部接口**，随时可能失效，**风险自负**。
+**Features**
+- 🖼️ Saves attachment images alongside each task (official export & API can't).
+- 📝 One `.md` per task — YAML frontmatter with times / priority / repeat / tags / reminders / **parent task** / **folder**, plus the original note body.
+- 🗂️ `manifest.json` records every file path and **honestly lists what couldn't be captured**.
+- 🔌 Two entry points sharing one core: a Node CLI (batch) and a Chrome extension ([`extension/`](extension/)).
 
-### 怎么拿 CSV
+**Two entry points**
 
-滴答网页端 **设置 → 导出 / 备份**，下载 CSV。这是官方、合规、跨平台的数据来源。
+| | Node CLI | Chrome extension |
+| --- | --- | --- |
+| Images | macOS + Chrome (reads local cookie) | Any OS + Chrome logged in |
+| Output | Local folder | Browser zip download |
 
-### 用法
+**Quick start (CLI, Node ≥ 18).** Get the CSV from the web app's **Settings → Export / Backup**:
 
 ```bash
-ticktick-export <导出的.csv> [选项]
+npm install
+npm run dev -- ./TickTick.csv                  # text only, cross-platform
+npm run dev -- ./TickTick.csv --with-images    # + images (macOS + Chrome + dida365)
 ```
 
-- `--out <目录>`：输出目录，默认 `./vault`。
-- `--with-images`：额外取图（仅 macOS + Chrome + dida365）。
-- `--host dida365|ticktick`：`dida365` 国内（默认，**已验证**）；`ticktick` 海外（**实验性，未验证，可能直接不支持图片**）。
+Useful options: `--out <dir>`, `--host dida365|ticktick` (overseas is experimental).
 
-### 产出
+**Output:** `vault/<List>/<Task>.md` + `attachments/` + `manifest.json` (the machine-readable source of truth — downstream importers should read it, not reverse-parse the markdown).
 
-- `vault/<清单名>/<任务标题>.md`：每个任务一个文件，YAML frontmatter 放结构化字段（id / 状态 / 时间 / 清单 / 优先级 / 重复 / 提醒 / tags），正文用相对路径 `![](attachments/<id>.<ext>)` 引图。
-- `vault/attachments/<附件id>.<ext>`：附件字节（仅 `--with-images`）。
-- `vault/manifest.json`：**机读真值**，含 `schemaVersion`、任务/项目/附件 → 本地文件的映射，并**如实标注缺口**（非 macOS、海外未验证、已完成任务超出 `limit=100` 时间窗拿不全等）。下游工具应认 manifest，不要反向解析 markdown。
-
-### 风险与边界
-
-- 默认档只依赖 CSV，哪里都能跑。
-- 取图依赖 macOS Keychain + Chrome 登录态，仅 macOS 可用。
-- `ticktick`（海外）取图分支**未经测试**，域名 / 接口 / cookie 域可能不同，可能完全不工作；失败会记录到 manifest 并回退为无图。
-- 即便在支持路径上，**已完成任务可能取不全**（内部接口只回最近的已完成任务），缺口都会列在 manifest 里。
-
-### 免责声明
-
-**本工具独立开发，与 TickTick / 滴答清单无任何隶属或关联，未获其授权。**
-
-- **默认档**只用官方导出的 CSV，完全合规。
-- **`--with-images` 档**用你自己的 Chrome 登录态调用滴答**未公开的内部接口**（`/api/v2`、`/api/v1`）。这些接口**不保证长期存在**：滴答随时可能改字段名、改路径、加签名或下线，届时取图会**静默回退为无图**导出。
-- **仅限导出本人数据**。工具只读取你自己的登录态、你自己的数据，严禁用于访问他人账号或抓取公开 / 共享内容。
-- **服务条款**：自动访问内部接口可能与滴答的用户协议冲突，使用风险由你自己承担。
-- **不要用于商用**。保持个人自用 / 开源 / 免费，实际风险很低；一旦收费，风险会显著上升。
-- 按 MIT 协议「按原样」提供，不作任何担保，**风险自负**。
-
-浏览器扩展见 [`extension/`](extension/)（跨平台、无需 Keychain，用 `chrome.cookies` 取登录态）。
+**Read this before `--with-images`.** The image path talks to TickTick's **undocumented internal `/api/v2` endpoints** using your own login cookie. These may change or break at any time; on any failure it **silently falls back to a no-image vault** and records the reason in `manifest.json`. It is not affiliated with or endorsed by TickTick, may conflict with their Terms of Service, and **must not be commercialized**. macOS-only on the CLI; the extension works on any OS via `chrome.cookies`. Provided **as-is, without warranty**, under the MIT license — see [LICENSE](LICENSE) and the 免责声明 section above.

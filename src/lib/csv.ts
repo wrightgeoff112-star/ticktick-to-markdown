@@ -53,6 +53,7 @@ export interface CsvTask {
   startDate: string | null;
   dueDate: string | null;
   completedTime: string | null;
+  createdTime: string | null;
   isAllDay: boolean;
   timezone: string;
   tags: string[];
@@ -400,6 +401,7 @@ export function parseDidaCsv(text: string): CsvParseResult {
     const dueDate = toIsoInstant(trimValue(row["Due Date"]));
     const completedTime =
       status === "done" ? toIsoInstant(rawCompletedTime) : null;
+    const createdTime = toIsoInstant(trimValue(row["Created Time"]));
 
     const isAllDay = trimValue(row["Is All Day"]).toLowerCase() === "true";
     const timezone = trimValue(row.Timezone) || "Asia/Shanghai";
@@ -446,6 +448,7 @@ export function parseDidaCsv(text: string): CsvParseResult {
       startDate,
       dueDate,
       completedTime,
+      createdTime,
       isAllDay,
       timezone,
       tags,
