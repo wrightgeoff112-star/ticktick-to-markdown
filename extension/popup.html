@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TickTick → Markdown</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #09090b;
+        --muted: #71717a;
+        --border: #e4e4e7;
+        --accent: #18181b;
+        --accent-fg: #fafafa;
+        --ok: #16a34a;
+        --warn: #d97706;
+        --err: #dc2626;
+        --radius: 8px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #09090b;
+          --fg: #fafafa;
+          --muted: #a1a1aa;
+          --border: #27272a;
+          --accent: #fafafa;
+          --accent-fg: #18181b;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        width: 384px;
+        margin: 0;
+        padding: 16px;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+          system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 { font-size: 15px; margin: 0; }
+      .subtitle { color: var(--muted); font-size: 12px; margin: 2px 0 14px; }
+
+      /* 站点切换：label 可见 + order 翻转；input 隐藏但保留 DOM 相邻。 */
+      .segmented {
+        display: flex;
+        margin-bottom: 14px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .segmented input {
+        position: absolute;
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .segmented label {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        text-align: center;
+        padding: 8px 10px;
+        cursor: pointer;
+        color: var(--muted);
+        border-right: 1px solid var(--border);
+        transition: background 0.12s, color 0.12s;
+      }
+      .segmented label[data-lang="en"] { border-right: none; }
+      .segmented label[data-lang="zh"] { order: 1; }
+      .segmented label[data-lang="en"] { order: 2; }
+      .segmented[data-active-lang="en"] label[data-lang="zh"] { order: 2; }
+      .segmented[data-active-lang="en"] label[data-lang="en"] { order: 1; }
+      .segmented input:checked + label {
+        background: var(--accent);
+        color: var(--accent-fg);
+      }
+
+      section { margin-bottom: 14px; }
+      .step-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+      .step-list { color: var(--muted); font-size: 12px; margin: 0; padding-left: 18px; }
+      .step-list li { margin: 2px 0; }
+
+      .file-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .file-btn {
+        display: inline-block;
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        cursor: pointer;
+        font-size: 12px;
+      }
+      #csv-picked { font-size: 12px; color: var(--muted); }
+      #csv-picked[data-on="true"] { color: var(--ok); }
+      #csv-file { display: none; }
+
+      .check-row { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 14px; cursor: pointer; }
+      .check-row input { margin: 0; }
+
+      button {
+        width: 100%;
+        padding: 9px 12px;
+        border: none;
+        border-radius: var(--radius);
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.6; cursor: default; }
+
+      #status { margin-top: 10px; font-size: 12px; min-height: 1em; }
+      #status[data-kind="ok"] { color: var(--ok); }
+      #status[data-kind="warn"] { color: var(--warn); }
+      #status[data-kind="error"] {
+        color: var(--err);
+        background: color-mix(in srgb, var(--err) 8%, transparent);
+        border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+        padding: 6px 8px;
+        border-radius: var(--radius);
+      }
+    </style>
+  </head>
+  <body>
+    <h1 data-i18n="title">滴答清单导出 Markdown</h1>
+    <div class="subtitle" data-i18n="subtitle">任务数据 → Markdown</div>
+
+    <div class="segmented" data-active-lang="zh">
+      <input type="radio" id="host-dida" name="host" value="dida365" checked />
+      <label for="host-dida" data-lang="zh" data-i18n="hostCn">中国站 dida365</label>
+      <input type="radio" id="host-tick" name="host" value="ticktick" />
+      <label for="host-tick" data-lang="en" data-i18n="hostEn">全球站 ticktick</label>
+    </div>
+
+    <section>
+      <div class="step-title" data-i18n="step1Title">① 从滴答导出数据</div>
+      <ol class="step-list">
+        <li data-i18n="step1Login">登录网页版</li>
+        <li data-i18n="step1Settings">设置 → 账号与安全</li>
+        <li data-i18n="step1Backup">生成备份 → 得到 CSV</li>
+      </ol>
+    </section>
+
+    <section>
+      <div class="step-title" data-i18n="step2Title">② 导出成 Markdown</div>
+      <div class="file-row">
+        <label for="csv-file" class="file-btn" data-i18n="csvLabel">选择 CSV 文件</label>
+        <span id="csv-picked"></span>
+      </div>
+      <input type="file" id="csv-file" accept=".csv" />
+      <label class="check-row">
+        <input type="checkbox" id="with-images" />
+        <span data-i18n="withImages">同步获取附件图片（需本浏览器已登录）</span>
+      </label>
+      <button id="download-btn" data-i18n="download">下载</button>
+    </section>
+
+    <div id="status"></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

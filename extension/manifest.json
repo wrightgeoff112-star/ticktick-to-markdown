@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "TickTick → Markdown（滴答清单导出）",
+  "version": "0.1.0",
+  "description": "把滴答清单 / TickTick 任务导出成 Markdown 笔记库（可用于 Obsidian 等），可选同步附件图片。",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TickTick → Markdown"
+  },
+  "permissions": ["cookies"],
+  "host_permissions": [
+    "https://*.dida365.com/*",
+    "https://*.ticktick.com/*"
+  ]
+}
