@@ -1,5 +1,7 @@
 # 滴答清单 → Markdown
 
+[中文](README.md) · [English](README.en.md)
+
 > **滴答能导出 CSV，但任务里的图片和附件全丢了。这个工具把它们一起搬走。**
 
 滴答清单 / TickTick 的官方导出只给一份 CSV——任务文字能带走，**图片、附件一律不导出**；官方 OpenAPI 同样拿不到附件。想迁到 Obsidian / Notion 或本地归档，图就没了。
@@ -81,6 +83,8 @@ repeat: "RRULE:FREQ=WEEKLY;BYDAY=MO"
 ![](attachments/att-9.png)
 ```
 
+> 上面是顶层任务的示例。**子任务**会额外多一行 `parent: <父任务id>`，指回父任务——父子层级不丢。
+
 正文里的图片引用会被改写成本地相对路径——**只对真正下载到的图片改写**，没拿到的保持原样，并在 manifest 里记一笔。下游工具（比如导回另一个 App）应读 `manifest.json`，不要反向解析 markdown。
 
 ## 图片是怎么抓到的（以及为什么有风险）
@@ -133,38 +137,3 @@ npm run build:extension  # 打包浏览器扩展 → extension/popup.js
 ```
 
 测试覆盖：CSV 解析、vault / manifest 构造、导出编排（注入 fetch + cookie loader，离线跑通取图链）、Chrome cookie 解密往返。
-
----
-
-## English
-
-*TickTick's official export is CSV-only — **images and attachments are dropped**. This tool brings them along into a Markdown vault (Obsidian-ready).*
-
-**Why this exists.** TickTick / 滴答清单 only exports a CSV: task text comes out, but **images and attachments are stripped**, and the official OpenAPI has no attachment access either. This tool fills that gap — tasks **with their attachment images**, as a structured Markdown vault.
-
-**Features**
-- 🖼️ Saves attachment images alongside each task (official export & API can't).
-- 📝 One `.md` per task — YAML frontmatter with times / priority / repeat / tags / reminders / **parent task** / **folder**, plus the original note body.
-- 🗂️ `manifest.json` records every file path and **honestly lists what couldn't be captured**.
-- 🔌 Two entry points sharing one core: a Node CLI (batch) and a Chrome extension ([`extension/`](extension/)).
-
-**Two entry points**
-
-| | Node CLI | Chrome extension |
-| --- | --- | --- |
-| Images | macOS + Chrome (reads local cookie) | Any OS + Chrome logged in |
-| Output | Local folder | Browser zip download |
-
-**Quick start (CLI, Node ≥ 18).** Get the CSV from the web app's **Settings → Export / Backup**:
-
-```bash
-npm install
-npm run dev -- ./TickTick.csv                  # text only, cross-platform
-npm run dev -- ./TickTick.csv --with-images    # + images (macOS + Chrome + dida365)
-```
-
-Useful options: `--out <dir>`, `--host dida365|ticktick` (overseas is experimental).
-
-**Output:** `vault/<List>/<Task>.md` + `attachments/` + `manifest.json` (the machine-readable source of truth — downstream importers should read it, not reverse-parse the markdown).
-
-**Read this before `--with-images`.** The image path talks to TickTick's **undocumented internal `/api/v2` endpoints** using your own login cookie. These may change or break at any time; on any failure it **silently falls back to a no-image vault** and records the reason in `manifest.json`. It is not affiliated with or endorsed by TickTick, may conflict with their Terms of Service, and **must not be commercialized**. macOS-only on the CLI; the extension works on any OS via `chrome.cookies`. Provided **as-is, without warranty**, under the MIT license — see [LICENSE](LICENSE) and the 免责声明 section above.
