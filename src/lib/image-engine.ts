@@ -1,24 +1,17 @@
 /**
- * Cookie-direct image engine — macOS + Chrome + dida365 only.
+ * Cookie-direct image engine — macOS + Chrome + dida365 only (Node side).
  *
- * Ported from sortday's `dida-local-direct.ts`. This talks to TickTick's
- * *internal / unofficial* web v2 API using the login cookie it reads out of your
- * local Chrome profile. It is:
+ * Talks to TickTick's *internal / unofficial* web v2 API using the login cookie
+ * it reads out of your local Chrome profile. It is:
  *   - macOS only (uses Keychain `security` + Chrome Safe Storage),
  *   - Chrome only (reads Chrome's Cookies SQLite DB),
  *   - verified only against dida365 (国内). ticktick (海外) is experimental.
  *
  * The API is unofficial and may break at any time. Use at your own risk.
  *
- * What we keep from the original:
- *   - macOS Keychain -> Chrome Safe Storage password,
- *   - PBKDF2(saltysalt, 1003, sha1) -> AES-128-CBC Chrome cookie decryption,
- *   - cookie -> internal v2 endpoints to enumerate projects + open tasks,
- *   - per-task attachment metadata + a second GET to download attachment bytes.
- *
- * What we dropped: the tRPC wrapper, the @repo/schemas zod types, and the
- * single-candidate fuzzy-matching path (sortday matched one task at a time;
- * here we enumerate the whole account once and key attachments by task id).
+ * 平台无关的解析逻辑（类型 + 附件解析 + 已完成窗口路径）已抽到 `image-api.ts`，
+ * 浏览器扩展引擎（extension/src/engine.ts）共用同一份。本文件只保留 Node 专属：
+ * Chrome cookie 解密 + 用 Node fetch 落地引擎操作。
  */
 
 import { execFile } from "node:child_process";
@@ -34,34 +27,40 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { HostConfig } from "./host.js";
+import {
+  attachmentsFromTaskRecord,
+  buildCompletedWindowPath,
+  normalizeAttachments,
+  type CookieMap,
+  type EngineAttachment,
+  type EngineProject,
+  type EngineSnapshot,
+  type RawRecord,
+} from "./image-api.js";
+
+// 保持 image-engine 原有公开 API 不变（export.ts 仍从这里 import）。
+export {
+  attachmentsFromTaskRecord,
+  type CookieMap,
+  type EngineAttachment,
+  type EngineProject,
+  type EngineSnapshot,
+  type RawRecord,
+};
 
 const execFileAsync = promisify(execFile);
 
+// Defaults to Chrome's "Default" profile; override with CHROME_PROFILE_DIR
+// (e.g. "Profile 10") to read cookies from another Chrome profile.
+const CHROME_PROFILE_DIR = process.env.CHROME_PROFILE_DIR ?? "Default";
 const CHROME_COOKIES_PATH = resolve(
   homedir(),
-  "Library/Application Support/Google/Chrome/Default/Cookies",
+  "Library/Application Support/Google/Chrome",
+  CHROME_PROFILE_DIR,
+  "Cookies",
 );
 const CHROME_SAFE_STORAGE_ACCOUNT = "Chrome";
 const CHROME_SAFE_STORAGE_SERVICE = "Chrome Safe Storage";
-
-export type CookieMap = Record<string, string>;
-
-export interface EngineAttachment {
-  id: string;
-  taskId: string;
-  projectId: string;
-  name: string;
-  /** MIME / content type as reported by the API, best-effort. */
-  type: string;
-  size?: number;
-  /** Download URL we will GET for bytes. */
-  url: string;
-}
-
-export interface EngineProject {
-  id: string;
-  name: string;
-}
 
 export class ImageEngineError extends Error {
   constructor(message: string) {
@@ -69,8 +68,6 @@ export class ImageEngineError extends Error {
     this.name = "ImageEngineError";
   }
 }
-
-export type RawRecord = Record<string, unknown>;
 
 type DidaFetchAttempt = {
   url: string;
@@ -80,7 +77,7 @@ type DidaFetchAttempt = {
 };
 
 // ---------------------------------------------------------------------------
-// Chrome cookie decryption (macOS)
+// Chrome cookie decrypt (macOS)
 // ---------------------------------------------------------------------------
 
 export function decryptChromeCookieValue(
@@ -299,100 +296,6 @@ async function fetchJson(
   throw new ImageEngineError(formatFailure(path, attempts));
 }
 
-function pickAttachmentUrl(input: RawRecord): string | null {
-  const candidates = [
-    input.url,
-    input.downloadUrl,
-    input.viewUrl,
-    input.previewUrl,
-    input.fileUrl,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-function buildAttachmentDownloadUrl(
-  input: RawRecord,
-  host: HostConfig,
-  taskId: string,
-  projectId: string,
-): string | null {
-  const attachmentId =
-    typeof input.id === "string"
-      ? input.id
-      : typeof input.refId === "string"
-        ? input.refId
-        : null;
-  if (!attachmentId) return null;
-  return `${host.apiUrl}/api/v1/attachment/${projectId}/${taskId}/${attachmentId}?action=download`;
-}
-
-function normalizeAttachments(
-  value: unknown,
-  host: HostConfig,
-  taskId: string,
-  projectId: string,
-): EngineAttachment[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map<EngineAttachment | null>((item, index) => {
-      if (!item || typeof item !== "object") return null;
-      const raw = item as RawRecord;
-      const name =
-        typeof raw.fileName === "string"
-          ? raw.fileName
-          : typeof raw.name === "string"
-            ? raw.name
-            : "attachment";
-      const url =
-        pickAttachmentUrl(raw) ??
-        buildAttachmentDownloadUrl(raw, host, taskId, projectId);
-      if (!url) return null;
-
-      const type =
-        typeof raw.contentType === "string"
-          ? raw.contentType
-          : typeof raw.type === "string"
-            ? raw.type
-            : typeof raw.fileType === "string"
-              ? raw.fileType
-              : "application/octet-stream";
-      const size =
-        typeof raw.size === "number"
-          ? raw.size
-          : typeof raw.fileSize === "number"
-            ? raw.fileSize
-            : undefined;
-
-      const att: EngineAttachment = {
-        id: typeof raw.id === "string" ? raw.id : `attachment-${index}`,
-        taskId,
-        projectId,
-        name,
-        type,
-        url,
-      };
-      if (typeof size === "number") att.size = size;
-      return att;
-    })
-    .filter((item): item is EngineAttachment => item !== null);
-}
-
-export interface EngineSnapshot {
-  cookies: CookieMap;
-  host: HostConfig;
-  fetchImpl: typeof fetch;
-  projects: EngineProject[];
-  /** taskId -> projectId, for open tasks present in the initial batch sync. */
-  projectIdByTaskId: Map<string, string>;
-  /** projectId -> full open-task records (with title + attachments) from the batch. */
-  openTasksByProject: Map<string, RawRecord[]>;
-}
-
 export interface LoadSnapshotOptions {
   host: HostConfig;
   fetchImpl?: typeof fetch;
@@ -460,32 +363,10 @@ export async function loadEngineSnapshot(
   };
 }
 
-const COMPLETED_WINDOW_HOURS = 168;
-
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-/**
- * Dida's /completed/ endpoint wants `from`/`to` as `YYYY-MM-DD HH:MM:SS` in UTC
- * (space pre-encoded as %20, NO timezone). Using a raw ISO string here is
- * silently ignored by the server (which is why descending-cursor pagination
- * looked stuck and only returned the most recent page).
- */
-function formatCompletedWindowPart(date: Date): string {
-  return (
-    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}` +
-    `%20${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`
-  );
-}
-
 /**
  * Fetch completed tasks in a ±168h window around `centerIso` (the task's own
- * completedTime). The CSV `taskId` is an export-local index, not the backend
- * id, so archived/completed tasks (the bulk of real accounts) are recovered by
- * targeting their completion time and matching on title. Completed records
- * already include their `attachments`, so no extra per-task fetch is needed.
- * Set `global` to query /project/all/completed (cross-project fallback).
+ * completedTime). Path construction is shared via `buildCompletedWindowPath`;
+ * only the fetch is Node-specific.
  */
 export async function fetchCompletedTasksInWindow(
   snapshot: EngineSnapshot,
@@ -493,14 +374,8 @@ export async function fetchCompletedTasksInWindow(
   centerIso: string,
   options: { windowHours?: number; global?: boolean } = {},
 ): Promise<RawRecord[]> {
-  const center = new Date(centerIso);
-  if (Number.isNaN(center.getTime())) return [];
-  const windowMs = (options.windowHours ?? COMPLETED_WINDOW_HOURS) * 3600 * 1000;
-  const from = formatCompletedWindowPart(new Date(center.getTime() - windowMs));
-  const to = formatCompletedWindowPart(new Date(center.getTime() + windowMs));
-  const path = options.global
-    ? `/api/v2/project/all/completed?from=${from}&to=${to}&limit=100`
-    : `/api/v2/project/${projectId}/completed/?from=${from}&to=${to}&limit=100`;
+  const path = buildCompletedWindowPath(projectId, centerIso, options);
+  if (!path) return [];
 
   try {
     const res = await fetchJson(
@@ -519,22 +394,10 @@ export async function fetchCompletedTasksInWindow(
   }
 }
 
-/** Extract downloadable attachments from a raw task record (open or completed). */
-export function attachmentsFromTaskRecord(
-  snapshot: EngineSnapshot,
-  task: RawRecord,
-): EngineAttachment[] {
-  const taskId = typeof task.id === "string" ? task.id : "";
-  const projectId = typeof task.projectId === "string" ? task.projectId : "";
-  if (!taskId || !projectId) return [];
-  return normalizeAttachments(task.attachments, snapshot.host, taskId, projectId);
-}
-
 /**
  * Fetch attachment metadata for a single task id. Returns [] when the task is
- * not reachable (e.g. completed task outside the open-task batch, or wrong
- * project). Errors are swallowed into [] so a single bad task can't abort the
- * whole export; callers track misses via the manifest gaps.
+ * not reachable. Errors are swallowed into [] so a single bad task can't abort
+ * the whole export; callers track misses via the manifest gaps.
  */
 export async function fetchTaskAttachments(
   snapshot: EngineSnapshot,
@@ -582,7 +445,7 @@ export async function fetchTaskAttachments(
 export async function downloadAttachmentBytes(
   snapshot: EngineSnapshot,
   attachment: EngineAttachment,
-): Promise<Buffer> {
+): Promise<Uint8Array> {
   const headers = buildHeaders(snapshot.cookies, snapshot.host);
   const response = await snapshot.fetchImpl(attachment.url, {
     method: "GET",
@@ -594,5 +457,5 @@ export async function downloadAttachmentBytes(
     );
   }
   const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return new Uint8Array(arrayBuffer);
 }

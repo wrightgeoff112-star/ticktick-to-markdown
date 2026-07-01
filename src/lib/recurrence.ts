@@ -1,12 +1,12 @@
 /**
  * Recurrence (repeat-rule) parsing.
  *
- * The sortday original delegated to an internal `@repo/providers` RRULE engine
- * to produce a fully-typed `Recurrence` object. That engine is not part of this
- * standalone tool, so we keep the raw + canonical RRULE string (lossless) and
- * additionally do a light, dependency-free structured parse of the most common
- * RRULE fields. Downstream consumers that need the full rule should read
- * `raw` / `canonical`; `parsed` is a best-effort convenience.
+ * Producing a fully-typed `Recurrence` object normally needs a full RRULE
+ * engine, which is not part of this standalone tool. We keep the raw +
+ * canonical RRULE string (lossless) and additionally do a light,
+ * dependency-free structured parse of the most common RRULE fields. Downstream
+ * consumers that need the full rule should read `raw` / `canonical`; `parsed`
+ * is a best-effort convenience.
  */
 
 export type DidaRepeatParseStatus = "parsed" | "fallback_raw" | "invalid";

@@ -1,10 +1,9 @@
 /**
  * Reminder-trigger parsing for TickTick / 滴答 CSV exports.
  *
- * Ported from the sortday implementation, with the i18n label formatting and
- * the temporal-polyfill <-> internal-reminder conversions removed (those are
- * sortday-specific). We keep the ISO-8601 duration parsing, which is the part
- * that actually understands the export format.
+ * ISO-8601 duration parsing for reminder triggers — the part that actually
+ * understands the export format. Label formatting and runtime conversions are
+ * out of scope for this standalone tool.
  */
 
 export type DidaReminderTriggerMode = "relative" | "day_clock" | "unknown";

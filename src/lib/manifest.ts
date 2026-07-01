@@ -1,7 +1,7 @@
 /**
  * Manifest: the machine-readable source of truth for an export.
  *
- * Downstream consumers (e.g. sortday re-import) should read `manifest.json` and
+ * Downstream consumers (e.g. re-import into another app) should read `manifest.json` and
  * NEVER reverse-parse the generated markdown. The markdown is for humans /
  * Obsidian; the manifest is the stable, versioned contract.
  */
@@ -49,6 +49,7 @@ export const ManifestGapSchema = z.object({
     "image_engine_failed",
     "task_attachment_unreachable",
     "attachment_download_failed",
+    "account_mismatch",
   ]),
   /** Human-readable explanation. */
   message: z.string(),

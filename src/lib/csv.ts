@@ -1,11 +1,10 @@
 /**
  * TickTick / 滴答清单 official CSV export parser.
  *
- * Reimplemented standalone from sortday's `dida-csv.ts`. We keep the parts that
- * understand the export format (CSV tokenizer, header detection, status /
- * priority mapping, list+folder grouping, tags, attachment refs, repeat &
- * reminder rules) and emit a neutral, self-describing task model — instead of
- * sortday's internal `ImportedLocalThing` / sidebar-list / rich-HTML model.
+ * Standalone reimplementation. We keep the parts that understand the export
+ * format (CSV tokenizer, header detection, status / priority mapping,
+ * list+folder grouping, tags, attachment refs, repeat & reminder rules) and
+ * emit a neutral, self-describing task model.
  */
 
 import {
