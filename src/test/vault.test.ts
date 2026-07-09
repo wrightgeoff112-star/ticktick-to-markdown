@@ -38,6 +38,10 @@ test("markdown has YAML frontmatter with structured fields", () => {
   assert.ok(ship);
   assert.match(ship.text, /^---\n/);
   assert.match(ship.text, /\nstatus: todo\n/);
+  // TickTick 的时段头尾 → start / end（不是 due）。due 保留给真截止，滴答不产生。
+  assert.match(ship.text, /\nstart: /);
+  assert.match(ship.text, /\nend: /);
+  assert.doesNotMatch(ship.text, /\ndue: /);
   assert.match(ship.text, /\npriority: 3\n/);
   assert.match(ship.text, /\ntags: \[release, urgent\]\n/);
   assert.match(ship.text, /\nrepeat: "RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO"\n/);

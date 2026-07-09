@@ -2795,6 +2795,7 @@
       const startDate = toIsoInstant(trimValue(row["Start Date"]));
       const dueDate = toIsoInstant(trimValue(row["Due Date"]));
       const completedTime = status === "done" ? toIsoInstant(rawCompletedTime) : null;
+      const createdTime = toIsoInstant(trimValue(row["Created Time"]));
       const isAllDay = trimValue(row["Is All Day"]).toLowerCase() === "true";
       const timezone = trimValue(row.Timezone) || "Asia/Shanghai";
       const tags = splitTags(trimValue(row.Tags));
@@ -2831,6 +2832,7 @@
         startDate,
         dueDate,
         completedTime,
+        createdTime,
         isAllDay,
         timezone,
         tags,
@@ -7201,20 +7203,27 @@
   function yamlStringList(values) {
     return `[${values.map((v) => yamlScalar(v)).join(", ")}]`;
   }
-  function buildFrontmatter(task, listTitle) {
+  function buildFrontmatter(task, listTitle, folderTitle) {
     const lines = ["---"];
     lines.push(`id: ${yamlScalar(task.id)}`);
     if (task.sourceTaskId) {
       lines.push(`sourceTaskId: ${yamlScalar(task.sourceTaskId)}`);
     }
+    if (task.parentId) {
+      lines.push(`parent: ${yamlScalar(task.parentId)}`);
+    }
     lines.push(`kind: ${task.kind}`);
     lines.push(`status: ${task.status}`);
+    if (folderTitle) lines.push(`folder: ${yamlScalar(folderTitle)}`);
     if (listTitle) lines.push(`list: ${yamlScalar(listTitle)}`);
     if (task.priority != null) lines.push(`priority: ${task.priority}`);
     if (task.startDate) lines.push(`start: ${yamlScalar(task.startDate)}`);
-    if (task.dueDate) lines.push(`due: ${yamlScalar(task.dueDate)}`);
+    if (task.dueDate) lines.push(`end: ${yamlScalar(task.dueDate)}`);
     if (task.completedTime) {
       lines.push(`completed: ${yamlScalar(task.completedTime)}`);
+    }
+    if (task.createdTime) {
+      lines.push(`created: ${yamlScalar(task.createdTime)}`);
     }
     lines.push(`allDay: ${task.isAllDay}`);
     if (task.timezone) lines.push(`timezone: ${yamlScalar(task.timezone)}`);
@@ -7261,6 +7270,9 @@
     const listById = new Map(
       input.csv.lists.map((l) => [l.id, l])
     );
+    const folderById = new Map(
+      input.csv.folders.map((f) => [f.id, f])
+    );
     const attachmentFileById = /* @__PURE__ */ new Map();
     const manifestAttachments = [];
     let attachmentsDownloaded = 0;
@@ -7306,7 +7318,12 @@
       }
       usedMarkdownPaths.add(mdPath);
       const attachmentsForTask = attachmentsByTask.get(task.sourceTaskId ?? "") ?? [];
-      const frontmatter = buildFrontmatter(task, list?.title ?? null);
+      const folderTitle = list?.folderId ? folderById.get(list.folderId)?.title ?? null : null;
+      const frontmatter = buildFrontmatter(
+        task,
+        list?.title ?? null,
+        folderTitle
+      );
       const body = rewriteBody(
         task.content ?? "",
         task,

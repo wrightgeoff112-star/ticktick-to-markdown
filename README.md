@@ -69,7 +69,7 @@ list: Roadmap
 status: todo
 priority: 3
 start: 2026-06-10T01:00:00.000Z
-due: 2026-06-12T10:00:00.000Z
+end: 2026-06-12T10:00:00.000Z
 created: 2026-06-01T00:00:00.000Z
 allDay: false
 timezone: Asia/Shanghai
@@ -84,6 +84,8 @@ repeat: "RRULE:FREQ=WEEKLY;BYDAY=MO"
 ```
 
 > 上面是顶层任务的示例。**子任务**会额外多一行 `parent: <父任务id>`，指回父任务——父子层级不丢。
+
+> **时间字段**：`start` = 滴答 Start Date，`end` = 滴答 Due Date。滴答的 “Due Date” 其实是这段时间的**结束点**（滴答只有一段时间、没有独立截止概念），所以这里写成 `start`/`end`（一段时间的头尾），**不产生 `due`**。`due` 这个字段名留给「真截止」——滴答没有，故不输出。别把 `end` 改回 `due`。
 
 正文里的图片引用会被改写成本地相对路径——**只对真正下载到的图片改写**，没拿到的保持原样，并在 manifest 里记一笔。下游工具（比如导回另一个 App）应读 `manifest.json`，不要反向解析 markdown。
 
