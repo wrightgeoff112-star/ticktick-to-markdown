@@ -29,7 +29,7 @@
       }
       * { box-sizing: border-box; }
       body {
-        width: 384px;
+        width: 300px;
         margin: 0;
         padding: 16px;
         font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -40,7 +40,7 @@
       h1 { font-size: 15px; margin: 0; }
       .subtitle { color: var(--muted); font-size: 12px; margin: 2px 0 14px; }
 
-      /* 站点切换：label 可见 + order 翻转；input 隐藏但保留 DOM 相邻。 */
+      /* 站点切换：label 可见、位置固定；input 隐藏但保留 DOM 相邻。 */
       .segmented {
         display: flex;
         margin-bottom: 14px;
@@ -66,10 +66,6 @@
         transition: background 0.12s, color 0.12s;
       }
       .segmented label[data-lang="en"] { border-right: none; }
-      .segmented label[data-lang="zh"] { order: 1; }
-      .segmented label[data-lang="en"] { order: 2; }
-      .segmented[data-active-lang="en"] label[data-lang="zh"] { order: 2; }
-      .segmented[data-active-lang="en"] label[data-lang="en"] { order: 1; }
       .segmented input:checked + label {
         background: var(--accent);
         color: var(--accent-fg);
@@ -90,6 +86,12 @@
         font-size: 12px;
       }
       #csv-picked { font-size: 12px; color: var(--muted); }
+      .hint {
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--muted);
+        margin: 2px 0 10px;
+      }
       #csv-picked[data-on="true"] { color: var(--ok); }
       #csv-file { display: none; }
 
@@ -127,17 +129,18 @@
 
     <div class="segmented" data-active-lang="zh">
       <input type="radio" id="host-dida" name="host" value="dida365" checked />
-      <label for="host-dida" data-lang="zh" data-i18n="hostCn">中国站 dida365</label>
+      <label for="host-dida" data-lang="zh" data-i18n="hostCn">中国站</label>
       <input type="radio" id="host-tick" name="host" value="ticktick" />
-      <label for="host-tick" data-lang="en" data-i18n="hostEn">全球站 ticktick</label>
+      <label for="host-tick" data-lang="en" data-i18n="hostEn">全球站</label>
     </div>
 
     <section>
-      <div class="step-title" data-i18n="step1Title">① 从滴答导出数据</div>
+      <div class="step-title" data-i18n="step1Title">① 从滴答清单导出数据</div>
       <ol class="step-list">
-        <li data-i18n="step1Login">登录网页版</li>
-        <li data-i18n="step1Settings">设置 → 账号与安全</li>
-        <li data-i18n="step1Backup">生成备份 → 得到 CSV</li>
+        <li data-i18n="step1Login">登录网页版（dida365.com）</li>
+        <li data-i18n="step1Settings">左上角头像 → 设置 → 账号与安全</li>
+        <li data-i18n="step1Backup">导入与备份 → 数据备份 → 生成备份</li>
+        <li data-i18n="step1Download">下载得到 CSV 文件</li>
       </ol>
     </section>
 
@@ -148,9 +151,12 @@
         <span id="csv-picked"></span>
       </div>
       <input type="file" id="csv-file" accept=".csv" />
+      <p class="hint" data-i18n="csvHint">
+        选择上一步得到的 CSV 文件，即可生成一套带 YAML frontmatter 的 Markdown 笔记，可直接用于 Obsidian 等软件。如需连同附件图片一并导出，请勾选下方选项。
+      </p>
       <label class="check-row">
         <input type="checkbox" id="with-images" />
-        <span data-i18n="withImages">同步获取附件图片（需本浏览器已登录）</span>
+        <span data-i18n="withImages">同步获取附件图片（需本浏览器已登录滴答清单网页版）</span>
       </label>
       <button id="download-btn" data-i18n="download">下载</button>
     </section>

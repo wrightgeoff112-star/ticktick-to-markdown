@@ -22,15 +22,18 @@ const I18N: Record<Lang, Record<string, string>> = {
   zh: {
     title: "滴答清单导出 Markdown",
     subtitle: "任务数据 → Markdown，可用于 Obsidian 等笔记软件",
-    hostCn: "中国站 dida365",
-    hostEn: "全球站 ticktick",
-    step1Title: "① 从滴答导出数据",
-    step1Login: "登录网页版",
-    step1Settings: "设置 → 账号与安全",
-    step1Backup: "生成备份 → 得到 CSV",
+    hostCn: "中国站",
+    hostEn: "全球站",
+    step1Title: "① 从滴答清单导出数据",
+    step1Login: "登录网页版（dida365.com）",
+    step1Settings: "左上角头像 → 设置 → 账号与安全",
+    step1Backup: "导入与备份 → 数据备份 → 生成备份",
+    step1Download: "下载得到 CSV 文件",
     step2Title: "② 导出成 Markdown",
+    csvHint:
+      "选择上一步得到的 CSV 文件，即可生成一套带 YAML frontmatter 的 Markdown 笔记，可直接用于 Obsidian 等软件。如需连同附件图片一并导出，请勾选下方选项。",
     csvLabel: "选择 CSV 文件",
-    withImages: "同步获取附件图片（需本浏览器已登录）",
+    withImages: "同步获取附件图片（需本浏览器已登录滴答清单网页版）",
     download: "下载",
     processing: "处理中…",
     selectCsvWarn: "请先选择 CSV 文件",
@@ -43,15 +46,18 @@ const I18N: Record<Lang, Record<string, string>> = {
   en: {
     title: "TickTick to Markdown",
     subtitle: "Task data → Markdown, works with Obsidian & co.",
-    hostCn: "dida365 (CN)",
-    hostEn: "ticktick (Global)",
+    hostCn: "China",
+    hostEn: "Global",
     step1Title: "① Export from TickTick",
-    step1Login: "Log in to the web app",
-    step1Settings: "Settings → Account & Security",
-    step1Backup: "Generate backup → get the CSV",
+    step1Login: "Log in to the web app (ticktick.com)",
+    step1Settings: "Avatar (top-left) → Settings → Account & Security",
+    step1Backup: "Import & Backup → Data Backup → Generate backup",
+    step1Download: "Download the CSV file",
     step2Title: "② Export to Markdown",
+    csvHint:
+      "Choose the CSV file from the previous step to generate a set of Markdown notes with YAML frontmatter, ready for Obsidian & co. To export attachment images as well, tick the option below.",
     csvLabel: "Choose CSV file",
-    withImages: "Also fetch attachment images (must be logged in)",
+    withImages: "Also fetch attachment images (requires being logged in to TickTick web in this browser)",
     download: "Download",
     processing: "Processing…",
     selectCsvWarn: "Please choose a CSV file first",
@@ -188,7 +194,7 @@ function init(): void {
   // 初始语言按默认选中站点。
   applyLang(langForHost(getHostId()));
 
-  // 站点切换 → 整体语言 + 地区按钮 order 翻转。
+  // 站点切换 → 整体语言切换（tab 位置保持不变）。
   for (const input of document.querySelectorAll<HTMLInputElement>(
     'input[name="host"]',
   )) {

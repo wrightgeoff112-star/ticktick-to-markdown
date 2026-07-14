@@ -25,6 +25,19 @@
 
 > 也支持**纯 CSV 模式**（不带图）——全平台、零依赖、完全合规。
 
+## 快速开始（Chrome 扩展）
+
+不想装 Node、只想点几下就导出的，用 Chrome 扩展：
+
+[![下载扩展](https://img.shields.io/badge/⬇%20下载扩展-ticktick--markdown.zip-18181b?style=for-the-badge)](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/latest/download/ticktick-markdown-extension.zip)
+
+1. 点上面按钮下载 zip，**解压**。
+2. 打开 `chrome://extensions`，右上角开启**开发者模式**。
+3. 点**「加载已解压的扩展程序」**，选解压出来的文件夹。
+4. 登录滴答清单网页版，点工具栏的插件图标，按弹窗提示导出即可。
+
+> Chrome 扩展目前需以"开发者模式"手动加载；上架应用商店后可一键安装。
+
 ## 快速开始（CLI）
 
 需要 Node.js ≥ 18。CSV 怎么拿：滴答网页端 **设置 → 导出 / 备份**。
