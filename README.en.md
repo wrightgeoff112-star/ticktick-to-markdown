@@ -21,22 +21,23 @@ Sign in on the official website. The assistant does not modify your source tasks
 
 ## Download and install
 
-**[1.0.0 is available](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0). Download the installer for your computer:**
+**[1.1.0 is available](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.1.0). Download the installer for your computer:**
 
 | Your computer | Installer | Installation |
 | --- | --- | --- |
-| Mac · Apple Silicon | [Download Apple Silicon DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-arm64.dmg) | Open and drag the app to Applications |
-| Mac · Intel | [Download Intel DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-x64.dmg) | Open and drag the app to Applications |
-| Windows · 64-bit Intel / AMD | [Download Windows EXE](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-windows-x64.exe) | Open and follow the installer |
+| Mac · Apple Silicon | [Download Apple Silicon DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.1.0/ticktick-backup-assistant-1.1.0-macos-arm64.dmg) | Open and drag the app to Applications |
+| Mac · Intel | [Download Intel DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.1.0/ticktick-backup-assistant-1.1.0-macos-x64.dmg) | Open and drag the app to Applications |
+| Windows · 64-bit Intel / AMD | [Download Windows EXE](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.1.0/ticktick-backup-assistant-1.1.0-windows-x64.exe) | Open and follow the installer |
 
-On Mac, check the chip under Apple menu → About This Mac. No development tools are needed to run the installed app. See the [release notes](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0) for information about system security prompts on first launch.
+On Mac, check the chip under Apple menu → About This Mac. No development tools are needed to run the installed app. See the [release notes](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.1.0) for information about system security prompts on first launch.
 
 ## Back up your account
 
 1. **Select your account site**: 滴答清单 (China) or TickTick (international).
-2. **Choose a save location**: Click **更改** (Change) and pick the ZIP location and filename.
-3. **Click 开始备份 (Start backup)**: On first use, sign in on the official page to continue exporting.
-4. **Open your backup**: Click **在文件夹中查看** (Show in folder), then extract the ZIP to read the Markdown.
+2. **Sign in and scan**: Click **登录并扫描** and sign in on the official page. An existing session is detected automatically; you can also click **我已登录，开始扫描** (I am signed in, start scanning) to retry. This only reads task and attachment metadata.
+3. **Select attachments**: Filter by task creation/completion dates, status, or list; select individual attachments or a number of the newest ones. The list shows 10 items per page and keeps selections across pages. Known sizes are estimated; unknown sizes are reported separately. All task and note text is retained.
+4. **Choose a location and save**: In step three, choose the ZIP location and filename, then download the selected attachments and save. Canceling the save dialog starts no downloads.
+5. **Open your backup**: Click **在文件夹中查看** (Show in folder), then extract the ZIP to read the Markdown.
 
 For Obsidian, choose “Open folder as vault” and select the extracted folder. Keep the whole folder together when moving the backup so images and attachment links keep working.
 
@@ -47,7 +48,7 @@ For Obsidian, choose “Open folder as vault” and select the extracted folder.
 | Tasks and notes | One Markdown file per item, organized by list |
 | Images and file attachments | Original files in `attachments/`, linked locally from notes |
 | Source data | Official `backup.csv`, or `api-snapshot.json` on the fallback path |
-| Backup manifest | `manifest.json`, recording file mappings and incomplete items |
+| Backup manifest | `manifest.json`, recording file mappings, user-excluded attachments, and incomplete items |
 
 If the official CSV is temporarily unavailable, the assistant attempts to save tasks and attachments through a fallback path and explains the source change in the result.
 
@@ -59,7 +60,7 @@ If the official CSV is temporarily unavailable, the assistant attempts to save t
 
 **What does “partially completed” mean?** Check the incomplete records. Saved content is still usable; retry incomplete tasks or attachments with **重试未完成项**. If only the official CSV is unavailable, Markdown and attachments may already be saved—check the export notes.
 
-**Do I need to start again after a save error?** No. During the current app session, click **保存已有备份** (Save prepared backup) to choose another location without downloading everything again.
+**Do I need to start again after a save error?** No. During the current app session, in step three click **保存已准备的备份** (Save prepared backup) to choose another location without downloading everything again.
 
 Report problems in [Issues](https://github.com/wrightgeoff112-star/ticktick-to-markdown/issues), including the app version and error message. Do not share passwords, login credentials or private task content.
 

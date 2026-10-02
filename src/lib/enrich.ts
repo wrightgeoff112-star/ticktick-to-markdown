@@ -37,11 +37,26 @@ export interface EnrichOptions {
   onProgress?: (message: string) => void;
   signal?: AbortSignal;
   previous?: EnrichResult;
+  selectedAttachmentKeys?: ReadonlySet<string>;
 }
 export interface EnrichResult {
   attachmentsByTask: Map<string, ResolvedAttachment[]>;
   apiTaskIds: Map<string, string>;
   gaps: ManifestGap[];
+}
+export interface AttachmentCandidate {
+  key: string;
+  task: CsvTask;
+  meta: EngineAttachment;
+}
+export interface AttachmentScan {
+  snapshot?: EngineSnapshot;
+  entries: AttachmentCandidate[];
+  apiTaskIds: Map<string, string>;
+  gaps: ManifestGap[];
+}
+export function attachmentKey(task: CsvTask, meta: EngineAttachment): string {
+  return JSON.stringify([task.id, meta.projectId, meta.taskId, meta.id]);
 }
 function instant(value: unknown): number | null {
   const n = typeof value === "string" ? Date.parse(value) : NaN;
@@ -80,21 +95,16 @@ function choose(
   }
   return hits;
 }
-export async function enrichWithImages(
+export async function scanAttachments(
   csv: CsvParseResult,
   engine: EngineApi,
   options: EnrichOptions = {},
-): Promise<EnrichResult> {
+): Promise<AttachmentScan> {
   const log = options.onProgress ?? (() => {});
-  const attachmentsByTask = new Map<string, ResolvedAttachment[]>(
-    [...(options.previous?.attachmentsByTask ?? [])].map(([id, atts]) => [
-      id,
-      atts.filter((a) => a.bytes || a.diskHandle),
-    ]),
-  );
   const apiTaskIds = new Map<string, string>(options.previous?.apiTaskIds);
   const gaps: ManifestGap[] = [];
-  const result = { attachmentsByTask, apiTaskIds, gaps };
+  const pending: AttachmentCandidate[] = [];
+  const result: AttachmentScan = { entries: pending, apiTaskIds, gaps };
   const canceled = () => {
     if (options.signal?.aborted) {
       if (!gaps.some((g) => g.code === "export_canceled"))
@@ -118,7 +128,7 @@ export async function enrichWithImages(
     return result;
   }
   const titles = new Map(csv.lists.map((l) => [l.id, l.title]));
-  const pending: { task: CsvTask; meta: EngineAttachment }[] = [];
+  result.snapshot = snapshot;
   const windows = new Map<string, Promise<RawRecord[]>>();
   const projectTasks = new Map<string, Promise<RawRecord[]>>();
   for (const task of csv.tasks) {
@@ -253,16 +263,69 @@ export async function enrichWithImages(
         taskId: task.id,
         message: `任务「${task.title}」正文引用附件，但接口没有附件信息。`,
       });
-    for (const meta of metas) pending.push({ task, meta });
+    for (const meta of metas)
+      pending.push({ task, meta, key: attachmentKey(task, meta) });
     log(`扫描任务:${apiTaskIds.size}/${csv.tasks.length}`);
   }
+  return result;
+}
+
+export async function downloadScannedAttachments(
+  scan: AttachmentScan,
+  engine: EngineApi,
+  options: EnrichOptions = {},
+): Promise<EnrichResult> {
+  const log = options.onProgress ?? (() => {});
+  const attachmentsByTask = new Map<string, ResolvedAttachment[]>();
+  if (!options.selectedAttachmentKeys) {
+    for (const [id, atts] of options.previous?.attachmentsByTask ?? [])
+      attachmentsByTask.set(
+        id,
+        atts.filter((a) => a.bytes || a.diskHandle),
+      );
+  }
+  const gaps = [...scan.gaps];
+  const result = { attachmentsByTask, apiTaskIds: scan.apiTaskIds, gaps };
+  const canceled = () => {
+    if (!options.signal?.aborted) return false;
+    if (!gaps.some((g) => g.code === "export_canceled"))
+      gaps.push({
+        code: "export_canceled",
+        message: "已取消，附件下载未完成。",
+      });
+    return true;
+  };
+  if (canceled() || !scan.snapshot) return result;
+  const snapshot = scan.snapshot;
+  const pending = scan.entries;
+  const selectedCount = pending.filter(
+    (a) =>
+      !options.selectedAttachmentKeys ||
+      options.selectedAttachmentKeys.has(a.key),
+  ).length;
   let downloaded = 0;
-  for (const { task, meta } of pending) {
+  for (const { task, meta, key: selectionKey } of pending) {
     if (canceled()) return result;
     const key = task.sourceTaskId ?? task.id;
     const list = (attachmentsByTask.get(key) ?? []).filter(
       (a) => a.id !== meta.id,
     );
+    if (
+      options.selectedAttachmentKeys &&
+      !options.selectedAttachmentKeys.has(selectionKey)
+    ) {
+      list.push({
+        id: meta.id,
+        taskId: key,
+        name: meta.name,
+        type: meta.type,
+        size: meta.size,
+        bytes: null,
+        skippedByUser: true,
+      });
+      attachmentsByTask.set(key, list);
+      continue;
+    }
     const previous = options.previous?.attachmentsByTask
       .get(key)
       ?.find((a) => a.id === meta.id && (a.bytes || a.diskHandle));
@@ -280,6 +343,7 @@ export async function enrichWithImages(
       size: meta.size,
       bytes: null,
     };
+    log(`正在下载：${meta.name}`);
     try {
       if (engine.downloadAttachmentFile) {
         const file = await engine.downloadAttachmentFile(snapshot, meta);
@@ -308,7 +372,17 @@ export async function enrichWithImages(
     }
     list.push(att);
     attachmentsByTask.set(key, list);
-    log(`已下载附件:${downloaded}/${pending.length}`);
+    log(`已下载附件:${downloaded}/${selectedCount}`);
   }
   return result;
+}
+
+/** Existing CLI callers retain the full scan-and-download behavior. */
+export async function enrichWithImages(
+  csv: CsvParseResult,
+  engine: EngineApi,
+  options: EnrichOptions = {},
+): Promise<EnrichResult> {
+  const scan = await scanAttachments(csv, engine, options);
+  return downloadScannedAttachments(scan, engine, options);
 }

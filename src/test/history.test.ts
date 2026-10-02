@@ -1,5 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+
+test("无效附件大小保留为未知，下载不携带负数预期长度", () => {
+  const attachments = normalizeAttachments(
+    [
+      { id: "a", size: -1 },
+      { id: "b", fileSize: Infinity },
+      { id: "c", size: 0 },
+    ],
+    resolveHost("dida365"),
+    "task",
+    "project",
+  );
+  assert.equal(attachments[0]?.size, undefined);
+  assert.equal(attachments[1]?.size, undefined);
+  assert.equal(attachments[2]?.size, 0);
+});
 import {
   fetchCompletedWindowComplete,
   normalizeAttachments,

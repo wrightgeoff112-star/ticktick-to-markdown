@@ -13,7 +13,7 @@ import { resolveHost } from "./lib/host.js";
 import { runExport } from "./lib/export.js";
 import { writeVault } from "./lib/fs.js";
 
-const TOOL_VERSION = "1.0.0";
+const TOOL_VERSION = "1.1.0";
 
 interface ParsedArgs {
   csvPath: string | null;

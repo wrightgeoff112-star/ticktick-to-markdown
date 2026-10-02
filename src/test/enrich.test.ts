@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseDidaCsv } from "../lib/csv.js";
-import { enrichWithImages, type EngineApi } from "../lib/enrich.js";
+import {
+  enrichWithImages,
+  scanAttachments,
+  downloadScannedAttachments,
+  type EngineApi,
+} from "../lib/enrich.js";
 import {
   attachmentsFromTaskRecord,
   type EngineSnapshot,
@@ -254,4 +259,41 @@ test("API status0带旧完成时间仍能匹配当前待办", async () => {
   );
   assert.equal(result.apiTaskIds.get("dida-1"), "real");
   assert.equal(result.gaps.length, 0);
+});
+
+test("下载中取消保留成功项，选择不变时继续只下载剩余项", async () => {
+  const e = engine([
+    {
+      ...rec(),
+      attachments: [
+        { id: "a", name: "a.pdf" },
+        { id: "b", name: "b.pdf" },
+      ],
+    },
+  ]);
+  const scan = await scanAttachments(csv(), e);
+  const selected = new Set(scan.entries.map((a) => a.key));
+  const controller = new AbortController();
+  const calls: string[] = [];
+  e.downloadAttachmentBytes = async (_s, a) => {
+    calls.push(a.id);
+    controller.abort();
+    return new Uint8Array([1]);
+  };
+  const partial = await downloadScannedAttachments(scan, e, {
+    signal: controller.signal,
+    selectedAttachmentKeys: selected,
+  });
+  assert.equal(partial.attachmentsByTask.get("30")?.[0]?.id, "a");
+  assert.ok(partial.gaps.some((g) => g.code === "export_canceled"));
+  e.downloadAttachmentBytes = async (_s, a) => {
+    calls.push(a.id);
+    return new Uint8Array([2]);
+  };
+  const retry = await downloadScannedAttachments(scan, e, {
+    selectedAttachmentKeys: selected,
+    previous: partial,
+  });
+  assert.deepEqual(calls, ["a", "b"]);
+  assert.equal(retry.gaps.length, 0);
 });

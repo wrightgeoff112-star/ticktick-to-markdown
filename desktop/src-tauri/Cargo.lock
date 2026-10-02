@@ -4056,7 +4056,7 @@ dependencies = [
 
 [[package]]
 name = "ticktick-export-desktop"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cookie",
  "infer 0.19.0",

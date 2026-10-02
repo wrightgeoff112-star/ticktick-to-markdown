@@ -144,7 +144,8 @@ export function normalizeAttachments(
         type,
         url,
       };
-      if (typeof size === "number") att.size = size;
+      if (typeof size === "number" && Number.isFinite(size) && size >= 0)
+        att.size = size;
       return att;
     })
     .filter((item): item is EngineAttachment => item !== null);

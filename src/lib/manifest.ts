@@ -19,6 +19,8 @@ export const ManifestAttachmentSchema = z.object({
   /** Path relative to vault root, e.g. "attachments/<id>.png". null = not downloaded. */
   file: z.string().nullable(),
   size: z.number().optional(),
+  /** User intentionally excluded this attachment. */
+  skippedByUser: z.boolean().optional(),
 });
 
 export const ManifestTaskSchema = z.object({

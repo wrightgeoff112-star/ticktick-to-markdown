@@ -21,22 +21,23 @@
 
 ## 下载与安装
 
-**[1.0.0 已发布](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0)，下载适合你电脑的安装包：**
+**[1.1.0 已发布](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.1.0)，下载适合你电脑的安装包：**
 
 | 你的电脑 | 选择的安装包 | 安装方式 |
 | --- | --- | --- |
-| Mac · Apple 芯片 | [下载 Apple Silicon DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-arm64.dmg) | 打开后拖入「应用程序」 |
-| Mac · Intel 芯片 | [下载 Intel DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-x64.dmg) | 打开后拖入「应用程序」 |
-| Windows · 64 位 Intel / AMD | [下载 Windows EXE](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-windows-x64.exe) | 打开后按提示安装 |
+| Mac · Apple 芯片 | [下载 Apple Silicon DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.1.0/ticktick-backup-assistant-1.1.0-macos-arm64.dmg) | 打开后拖入「应用程序」 |
+| Mac · Intel 芯片 | [下载 Intel DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.1.0/ticktick-backup-assistant-1.1.0-macos-x64.dmg) | 打开后拖入「应用程序」 |
+| Windows · 64 位 Intel / AMD | [下载 Windows EXE](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.1.0/ticktick-backup-assistant-1.1.0-windows-x64.exe) | 打开后按提示安装 |
 
-Mac 可在「苹果菜单 → 关于本机」查看芯片。安装后直接打开应用，无需安装开发工具。首次打开的系统安全提示见 [Release 说明](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0)。
+Mac 可在「苹果菜单 → 关于本机」查看芯片。安装后直接打开应用，无需安装开发工具。首次打开的系统安全提示见 [Release 说明](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.1.0)。
 
 ## 开始备份
 
 1. **选择账号站点**：滴答清单国内站，或 TickTick 国际站。
-2. **选择保存位置**：点击「更改」，指定 ZIP 文件的位置和名称。
-3. **点击「开始备份」**：首次使用会打开官方登录页面，登录后继续导出。
-4. **查看备份**：完成后点击「在文件夹中查看」，解压 ZIP 即可阅读 Markdown。
+2. **登录并扫描**：点击「登录并扫描」，在官方页面完成登录。已有登录状态会自动识别，也可点击「我已登录，开始扫描」继续。此时只读取任务与附件信息，不下载附件。
+3. **选择附件**：按任务时间、状态或清单筛选，也可勾选附件或选最新的指定数量。每页显示 10 个附件，跨页保留勾选；显示所选附件的预估大小，大小未知的项目单独提示。全部任务与笔记文字始终保留。
+4. **选择位置并保存**：进入第三步后指定 ZIP 的位置与名称，确认后下载所选附件并保存。取消保存窗口不会开始下载。
+5. **查看备份**：完成后点击「在文件夹中查看」，解压 ZIP 即可阅读 Markdown。
 
 想在 Obsidian 中使用？选择「打开文件夹作为仓库」，打开解压后的文件夹即可。图片和附件与笔记一起保留，移动备份时请保留整个文件夹。
 
@@ -47,7 +48,7 @@ Mac 可在「苹果菜单 → 关于本机」查看芯片。安装后直接打�
 | 任务与笔记 | 每项一个 Markdown 文件，按清单归档 |
 | 图片和文件附件 | 原始文件保存在 `attachments/`，笔记使用本地链接 |
 | 源数据 | 官方 `backup.csv`，或备用路径的 `api-snapshot.json` |
-| 备份清单 | `manifest.json`，记录文件对应关系与未完成项 |
+| 备份清单 | `manifest.json`，记录文件对应关系、用户未选附件与未完成项 |
 
 官方 CSV 暂时无法取得时，工具会尝试通过备用路径保存任务与附件，并在结果中说明源数据的变化。
 
@@ -59,7 +60,7 @@ Mac 可在「苹果菜单 → 关于本机」查看芯片。安装后直接打�
 
 **显示「部分完成」怎么办？** 先查看未完成记录。已成功保存的内容仍可使用；任务或附件未完成时，可以点击「重试未完成项」。如果只是官方 CSV 暂不可用，Markdown 与附件可能已经保存，请以导出说明为准。
 
-**保存失败需要从头再来吗？** 不需要。在当前应用会话中，点击「保存已有备份」可换位置再次保存，无需重新下载。
+**保存失败需要从头再来吗？** 不需要。在当前应用会话中，在第三步点击「保存已准备的备份」可换位置再次保存，无需重新下载。
 
 遇到问题可在 [Issues](https://github.com/wrightgeoff112-star/ticktick-to-markdown/issues) 反馈。请提供应用版本和错误提示，避免公开密码、登录凭据或私人任务内容。
 

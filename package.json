@@ -1,6 +1,6 @@
 {
   "name": "ticktick-export",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Export Dida/TickTick official CSV and attachments to a portable ZIP and Markdown vault.",
   "type": "module",
   "license": "MIT",

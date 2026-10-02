@@ -1,6 +1,86 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { exportDesktop, type NativeBridge } from "../lib/desktop-export.js";
+import * as desktop from "../lib/desktop-export.js";
+
+test("扫描只取得附件目录，选择后导出保留全部文字且只下载选中项", async () => {
+  assert.equal(typeof (desktop as any).scanDesktop, "function");
+  const calls: string[] = [];
+  const downloaded: string[] = [];
+  const csv = "taskId,Title,List Name\n1,任务一,收集箱\n2,任务二,收集箱";
+  const bridge: NativeBridge = async (command, args) => {
+    calls.push(command);
+    if (command === "api_json") {
+      if (args?.path === "/api/v2/data/export/auto")
+        return JSON.stringify({}) as any;
+      if (args?.path === "/api/v2/data/export")
+        return JSON.stringify(csv) as any;
+      return JSON.stringify({
+        inboxId: "i",
+        projectProfiles: [],
+        syncTaskBean: {
+          update: [
+            {
+              id: "r1",
+              projectId: "i",
+              title: "任务一",
+              attachments: [{ id: "a", name: "a.pdf", size: 3 }],
+            },
+            {
+              id: "r2",
+              projectId: "i",
+              title: "任务二",
+              attachments: [{ id: "b", name: "b.pdf" }],
+            },
+          ],
+        },
+      }) as any;
+    }
+    if (command === "download_attachment") {
+      downloaded.push(String(args?.attachmentId));
+      return { diskHandle: "h", size: 3, type: "application/pdf" } as any;
+    }
+    if (command === "save_zip") return "/selected/backup.zip" as any;
+    return undefined as any;
+  };
+  const scanController = new AbortController();
+  const scanned = await (desktop as any).scanDesktop("dida365", bridge, {
+    signal: scanController.signal,
+  });
+  assert.equal(scanned.scan.entries.length, 2);
+  assert.ok(!calls.includes("download_attachment"));
+  assert.ok(!calls.includes("save_zip"));
+  // The scan and download steps have separate cancellation lifetimes.
+  scanController.abort();
+  const apiCount = calls.filter((c) => c === "api_json").length;
+  const result = await exportDesktop("dida365", bridge, {
+    scanned,
+    selectedAttachmentKeys: new Set([scanned.scan.entries[0].key]),
+    destination: "/selected/backup.zip",
+  } as any);
+  assert.deepEqual(downloaded, ["a"]);
+  assert.equal(calls.filter((c) => c === "api_json").length, apiCount);
+  assert.equal(result.plan.manifest.tasks.length, 2);
+  assert.equal(result.plan.diskFiles.length, 1);
+  assert.equal(
+    (result.plan.manifest.attachments[1] as any).skippedByUser,
+    true,
+  );
+  assert.equal(result.plan.manifest.gaps.length, 0);
+  assert.match(
+    result.plan.files.find((f) => f.path.endsWith("任务二.md"))!.text,
+    /未选入/,
+  );
+  downloaded.length = 0;
+  const textOnly = await exportDesktop("dida365", bridge, {
+    scanned,
+    selectedAttachmentKeys: new Set(),
+    previous: result.enriched,
+  } as any);
+  assert.deepEqual(downloaded, []);
+  assert.equal(textOnly.plan.diskFiles.length, 0);
+  assert.equal(textOnly.plan.manifest.tasks.length, 2);
+});
 test("官方JSON编码CSV自动备份生成ZIP计划，保持源序号和父子任务", async () => {
   let zip: any;
   let download: Record<string, unknown> | undefined;
@@ -169,5 +249,5 @@ test("国际站不因站点选择生成固定的未验证缺口", async () => {
   });
   assert.equal(result.plan.manifest.gaps.length, 0);
   assert.equal(result.plan.manifest.source.imagesVerifiedHost, true);
-  assert.equal(result.plan.manifest.tool.version, "1.0.0");
+  assert.equal(result.plan.manifest.tool.version, "1.1.0");
 });

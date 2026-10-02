@@ -1,8 +1,10 @@
 /** Native transport only; parsing, identity matching and vault layout stay shared. */
 import { readApiBackup, type ApiBackup } from "./api-backup.js";
-import { parseDidaCsv } from "./csv.js";
+import { parseDidaCsv, type CsvParseResult } from "./csv.js";
 import {
-  enrichWithImages,
+  scanAttachments,
+  downloadScannedAttachments,
+  type AttachmentScan,
   type EnrichResult,
   type EngineApi,
 } from "./enrich.js";
@@ -21,6 +23,8 @@ export type NativeBridge = <T = unknown>(
 export type ExportStage = "preparing" | "scanning" | "downloading" | "packing";
 export interface DesktopExportOptions {
   destination?: string;
+  scanned?: DesktopScan;
+  selectedAttachmentKeys?: ReadonlySet<string>;
   signal?: AbortSignal;
   previous?: EnrichResult;
   rawCsv?: string;
@@ -28,16 +32,19 @@ export interface DesktopExportOptions {
   onEnriched?: (result: EnrichResult, rawCsv: string | undefined) => void;
   onPlan?: (plan: VaultPlan) => void;
 }
-export async function exportDesktop(
+export interface DesktopScan {
+  hostId: HostId;
+  csv: CsvParseResult;
+  rawCsv: string | undefined;
+  apiBackup?: ApiBackup;
+  scan: AttachmentScan;
+  engine: EngineApi;
+}
+export async function scanDesktop(
   hostId: HostId,
   invoke: NativeBridge,
   options: DesktopExportOptions = {},
-): Promise<{
-  path: string | null;
-  plan: VaultPlan;
-  enriched: EnrichResult;
-  rawCsv: string | undefined;
-}> {
+): Promise<DesktopScan> {
   const host = resolveHost(hostId);
   const progress = options.onProgress ?? (() => {});
   const active = () => {
@@ -130,8 +137,6 @@ export async function exportDesktop(
       throw Error("Native disk transport required");
     },
     downloadAttachmentFile: async (_snapshot, a) => {
-      active();
-      progress("downloading", `正在下载：${a.name}`);
       const file = await invoke<{
         diskHandle: string;
         size: number;
@@ -146,14 +151,42 @@ export async function exportDesktop(
     },
   };
   progress("scanning", `正在扫描 ${csv.tasks.length} 个任务及附件…`);
-  const enriched = await enrichWithImages(csv, engine, {
+  const scan = await scanAttachments(csv, engine, {
+    signal: options.signal,
+    onProgress: (message) => progress("scanning", message),
+  });
+  active();
+  return { hostId, csv, rawCsv, apiBackup, scan, engine };
+}
+
+export async function exportDesktop(
+  hostId: HostId,
+  invoke: NativeBridge,
+  options: DesktopExportOptions = {},
+): Promise<{
+  path: string | null;
+  plan: VaultPlan;
+  enriched: EnrichResult;
+  rawCsv: string | undefined;
+}> {
+  const active = () => {
+    if (options.signal?.aborted) throw Error("导出已取消");
+  };
+  active();
+  if (options.scanned && options.scanned.hostId !== hostId)
+    throw Error("账号站点已变更，请重新扫描");
+  const scanned =
+    options.scanned ?? (await scanDesktop(hostId, invoke, options));
+  if (options.scanned) await invoke("begin_export");
+  active();
+  const { csv, rawCsv, apiBackup, engine, scan } = scanned;
+  const host = resolveHost(hostId);
+  const progress = options.onProgress ?? (() => {});
+  const enriched = await downloadScannedAttachments(scan, engine, {
     signal: options.signal,
     previous: options.previous,
-    onProgress: (message) =>
-      progress(
-        message.startsWith("已下载") ? "downloading" : "scanning",
-        message,
-      ),
+    selectedAttachmentKeys: options.selectedAttachmentKeys,
+    onProgress: (message) => progress("downloading", message),
   });
   if (apiBackup)
     enriched.gaps.push(...apiBackup.gaps, {
@@ -171,7 +204,7 @@ export async function exportDesktop(
     rawCsv,
     ...(apiBackup ? { rawApiJson: apiBackup.rawJson } : {}),
     withImages: true,
-    toolVersion: "1.0.0",
+    toolVersion: "1.1.0",
     attachmentsByTask: enriched.attachmentsByTask,
     apiTaskIds: enriched.apiTaskIds,
     gaps,

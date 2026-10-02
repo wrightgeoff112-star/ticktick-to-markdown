@@ -26,6 +26,8 @@ export interface ResolvedAttachment {
   /** Downloaded bytes, or null if metadata-only / download failed. */
   bytes: Uint8Array | null;
   diskHandle?: string;
+  /** Explicitly excluded by the user, rather than a download failure. */
+  skippedByUser?: boolean;
 }
 
 export interface BuildVaultInput {
@@ -246,6 +248,7 @@ export function buildVault(input: BuildVaultInput): VaultPlan {
         type: att.type,
         file: filePath,
         ...(att.size != null ? { size: att.size } : {}),
+        ...(att.skippedByUser ? { skippedByUser: true } : {}),
       });
     }
   }
@@ -289,7 +292,9 @@ export function buildVault(input: BuildVaultInput): VaultPlan {
     const attachmentLinks = attachmentsForTask.map((att) => {
       const name = att.name.replace(/[\r\n]/g, " ").replace(/[\\[\]]/g, "\\$&");
       const file = attachmentFileById.get(att.id);
-      return file ? `- [${name}](<${prefix}${file}>)` : `- ${name}（未能下载）`;
+      return file
+        ? `- [${name}](<${prefix}${file}>)`
+        : `- ${name}（${att.skippedByUser ? "未选入" : "未能下载"}）`;
     });
     const attachmentSection = attachmentLinks.length
       ? `\n## 附件\n\n${attachmentLinks.join("\n")}`
