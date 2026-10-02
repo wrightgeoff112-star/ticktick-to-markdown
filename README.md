@@ -21,15 +21,15 @@
 
 ## 下载与安装
 
-**1.0.0 桌面安装包正在准备。发布后，从本仓库的 [Releases](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases) 下载对应安装包。**
+**[1.0.0 已发布](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0)，下载适合你电脑的安装包：**
 
 | 你的电脑 | 选择的安装包 | 安装方式 |
 | --- | --- | --- |
-| Mac · Apple 芯片 | macOS Apple Silicon `.dmg` | 打开后拖入「应用程序」 |
-| Mac · Intel 芯片 | macOS Intel `.dmg` | 打开后拖入「应用程序」 |
-| Windows · 64 位 Intel / AMD | Windows x64 `.exe` | 打开后按提示安装 |
+| Mac · Apple 芯片 | [下载 Apple Silicon DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-arm64.dmg) | 打开后拖入「应用程序」 |
+| Mac · Intel 芯片 | [下载 Intel DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-x64.dmg) | 打开后拖入「应用程序」 |
+| Windows · 64 位 Intel / AMD | [下载 Windows EXE](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-windows-x64.exe) | 打开后按提示安装 |
 
-Mac 可在「苹果菜单 → 关于本机」查看芯片。安装后直接打开应用，无需安装开发工具。
+Mac 可在「苹果菜单 → 关于本机」查看芯片。安装后直接打开应用，无需安装开发工具。首次打开的系统安全提示见 [Release 说明](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0)。
 
 ## 开始备份
 

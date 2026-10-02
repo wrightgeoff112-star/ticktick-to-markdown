@@ -21,15 +21,15 @@ Sign in on the official website. The assistant does not modify your source tasks
 
 ## Download and install
 
-**Desktop installers for 1.0.0 are being prepared. Once published, download the appropriate installer from this repository's [Releases](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases).**
+**[1.0.0 is available](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0). Download the installer for your computer:**
 
 | Your computer | Installer | Installation |
 | --- | --- | --- |
-| Mac · Apple Silicon | macOS Apple Silicon `.dmg` | Open and drag the app to Applications |
-| Mac · Intel | macOS Intel `.dmg` | Open and drag the app to Applications |
-| Windows · 64-bit Intel / AMD | Windows x64 `.exe` | Open and follow the installer |
+| Mac · Apple Silicon | [Download Apple Silicon DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-arm64.dmg) | Open and drag the app to Applications |
+| Mac · Intel | [Download Intel DMG](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-macos-x64.dmg) | Open and drag the app to Applications |
+| Windows · 64-bit Intel / AMD | [Download Windows EXE](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/download/v1.0.0/ticktick-backup-assistant-1.0.0-windows-x64.exe) | Open and follow the installer |
 
-On Mac, check the chip under Apple menu → About This Mac. No development tools are needed to run the installed app.
+On Mac, check the chip under Apple menu → About This Mac. No development tools are needed to run the installed app. See the [release notes](https://github.com/wrightgeoff112-star/ticktick-to-markdown/releases/tag/v1.0.0) for information about system security prompts on first launch.
 
 ## Back up your account
 
