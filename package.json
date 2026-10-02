@@ -1,7 +1,7 @@
 {
   "name": "ticktick-export",
-  "version": "0.1.0",
-  "description": "Export TickTick / 滴答清单 tasks to an Obsidian/Markdown vault, optionally enriched with attachment images via a local cookie-direct engine (macOS + Chrome only).",
+  "version": "1.0.0",
+  "description": "Export Dida/TickTick official CSV and attachments to a portable ZIP and Markdown vault.",
   "type": "module",
   "license": "MIT",
   "author": "ticktick-export contributors",
@@ -27,7 +27,12 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "node --import tsx --test src/test/*.test.ts",
-    "build:extension": "esbuild extension/src/main.ts --bundle --outfile=extension/popup.js --platform=browser --format=iife --target=es2022"
+    "build:extension": "esbuild extension/src/main.ts --bundle --outfile=extension/popup.js --platform=browser --format=iife --target=es2022",
+    "build:desktop": "bun scripts/build-desktop.ts",
+    "dev:desktop": "bun run build:desktop && cd desktop && bunx tauri dev",
+    "desktop:mac": "bun run build:desktop && cd desktop && bunx tauri build --bundles app,dmg",
+    "desktop:windows": "bun run build:desktop && cd desktop && bunx tauri build --bundles nsis",
+    "typecheck:desktop": "tsc -p desktop/tsconfig.json --noEmit"
   },
   "keywords": [
     "ticktick",
@@ -42,10 +47,12 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.1",
     "jszip": "^3.10.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1",
     "@types/node": "^20.14.0",
     "esbuild": "^0.28.1",
     "tsx": "^4.16.0",

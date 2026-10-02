@@ -74,6 +74,20 @@ test("parses repeat and reminder rules", () => {
   assert.equal(groceries?.reminderRules[0]?.triggerSeconds, 9 * 3600);
 });
 
+test("normalizes TickTick bare-CR (\\r) line breaks in note content to \\n", () => {
+  // 回归：TickTick CSV 用裸 \r 作正文换行（空行 \r\r）。若不归一成 \n，markdown
+  // 会把整段挤成一行（车贷账本 等笔记曾因此丢失标题/分行结构）。
+  const header =
+    "Folder Name,List Name,Title,Kind,Tags,Content,Is Check list,Start Date,Due Date,Reminder,Repeat,Priority,Status,Created Time,Completed Time,Order,Timezone,Is All Day,Is Floating,Column Name,Column Order,View Mode,taskId,parentId";
+  const row =
+    '"","备忘","账本","NOTE","","## 一、收入\r\r### 支付宝\r2020.7.14  +3000","false","","","","","0","0","","","","Asia/Shanghai","false","false","","","","4997",""';
+  const result = parseDidaCsv(`${header}\n${row}`);
+  const note = result.tasks.find((t) => t.title === "账本");
+
+  assert.ok(note);
+  assert.equal(note.content, "## 一、收入\n\n### 支付宝\n2020.7.14  +3000");
+});
+
 test("throws a friendly error when the header is missing", () => {
   assert.throws(() => parseDidaCsv(NO_HEADER_CSV), CsvFormatError);
 });

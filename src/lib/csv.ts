@@ -184,8 +184,16 @@ function trimValue(value: string | undefined): string {
     .trim();
 }
 
-function decodeDidaEscapedMultilineValue(value: string): string {
-  return value.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n");
+function decodeDidaMultilineValue(value: string): string {
+  // 滴答/TickTick 的 CSV 正文里，换行有两种编码，都要归一成 \n：
+  //   1. 字面转义序列 "\r\n" / "\n"（反斜杠 + 字母）——部分导出变体会这么写；
+  //   2. **真正的裸 CR 字符 \r（老 Mac 换行）**——TickTick 网页端 CSV 实测用它做正文
+  //      行分隔（空行是 \r\r）。tokenizer 在引号内保留了这些 \r，但若不转成 \n，
+  //      markdown 解析器不认裸 \r 为换行，整段正文会被挤成一行（见回归测试）。
+  return value
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n?/g, "\n");
 }
 
 function findHeaderIndex(rows: string[][]): number {
@@ -232,13 +240,14 @@ function normalizeTaskStatus(input: {
   completedTime: string;
 }): TaskStatus {
   const n = toNumber(input.rawStatus);
+  // Explicit CSV status wins over a retained historical completion timestamp.
   if (n === -1) return "canceled";
+  if (n === 0) return "todo";
+  if (n === 2 || n === 1) return "done";
 
   const hasCompletedTime = input.completedTime.trim().length > 0;
   if (hasCompletedTime) return "done";
 
-  // TickTick CSV uses status=2 for completed tasks exported from done/history views.
-  if (n === 1 || n === 2) return "done";
   return "todo";
 }
 
@@ -400,7 +409,7 @@ export function parseDidaCsv(text: string): CsvParseResult {
     const startDate = toIsoInstant(trimValue(row["Start Date"]));
     const dueDate = toIsoInstant(trimValue(row["Due Date"]));
     const completedTime =
-      status === "done" ? toIsoInstant(rawCompletedTime) : null;
+      status !== "todo" ? toIsoInstant(rawCompletedTime) : null;
     const createdTime = toIsoInstant(trimValue(row["Created Time"]));
 
     const isAllDay = trimValue(row["Is All Day"]).toLowerCase() === "true";
@@ -409,7 +418,7 @@ export function parseDidaCsv(text: string): CsvParseResult {
 
     const contentRaw = trimValue(row.Content);
     const content = contentRaw
-      ? decodeDidaEscapedMultilineValue(contentRaw)
+      ? decodeDidaMultilineValue(contentRaw)
       : null;
     const attachmentRefs = content ? extractAttachmentRefs(content) : [];
 

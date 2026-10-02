@@ -13,7 +13,7 @@ import { resolveHost } from "./lib/host.js";
 import { runExport } from "./lib/export.js";
 import { writeVault } from "./lib/fs.js";
 
-const TOOL_VERSION = "0.1.0";
+const TOOL_VERSION = "1.0.0";
 
 interface ParsedArgs {
   csvPath: string | null;
@@ -32,21 +32,21 @@ USAGE
 ARGUMENTS
   <export.csv>          Path to the CSV downloaded from the TickTick/滴答 web app
                         (Settings → Export → Backup). Required. This is the
-                        official, cross-platform, compliant data source.
+                        official CSV data source.
 
 OPTIONS
   --out <dir>           Output vault directory. Default: ./vault
-  --with-images         Also fetch attachment images via the cookie-direct engine.
-                        ⚠ macOS + Chrome + dida365 ONLY. Uses TickTick's UNOFFICIAL
+  --with-images         Also fetch images and file attachments using your Chrome session.
+                        ⚠ macOS + Chrome login required. Uses TickTick's UNOFFICIAL
                         internal API — it may break at any time. Use at your own risk.
   --host <id>           dida365 (国内, default, images verified) or
-                        ticktick (海外, EXPERIMENTAL — image path unverified).
+                        ticktick (国际站).
   -h, --help            Show this help.
   -v, --version         Show version.
 
 MODES
-  Default (CSV only)    Cross-platform. Produces a complete vault WITHOUT images.
-  --with-images         macOS-only image enrichment on top of the CSV.
+  Default (CSV only)    Cross-platform. Produces Markdown WITHOUT images or file attachments.
+  --with-images         macOS-only attachment enrichment on top of the CSV.
 
 OUTPUT (vault/)
   <list>/<task>.md      One markdown file per task, YAML frontmatter + body.
@@ -59,7 +59,7 @@ EXAMPLES
   ticktick-export ./TickTick.csv
   ticktick-export ./TickTick.csv --out ~/Obsidian/TickTick
   ticktick-export ./滴答清单.csv --with-images
-  ticktick-export ./TickTick.csv --with-images --host ticktick   # experimental
+  ticktick-export ./TickTick.csv --with-images --host ticktick   # international
 
 DISCLAIMER
   --with-images uses an unofficial, internal API and reads your local Chrome
@@ -94,7 +94,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--out": {
         const value = argv[i + 1];
         if (!value || value.startsWith("-")) {
-          throw new UsageError("--out 需要一个目录参数 / --out requires a directory.");
+          throw new UsageError(
+            "--out 需要一个目录参数 / --out requires a directory.",
+          );
         }
         out.out = value;
         i += 1;
@@ -103,7 +105,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--host": {
         const value = argv[i + 1];
         if (!value || value.startsWith("-")) {
-          throw new UsageError("--host 需要 dida365 或 ticktick / --host requires a value.");
+          throw new UsageError(
+            "--host 需要 dida365 或 ticktick / --host requires a value.",
+          );
         }
         out.host = value;
         i += 1;
@@ -119,7 +123,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         } else if (out.csvPath === null) {
           out.csvPath = arg;
         } else {
-          throw new UsageError(`只接受一个 CSV 路径，多余参数 / unexpected argument: ${arg}`);
+          throw new UsageError(
+            `只接受一个 CSV 路径，多余参数 / unexpected argument: ${arg}`,
+          );
         }
     }
   }
@@ -163,7 +169,9 @@ async function main(): Promise<number> {
   try {
     host = resolveHost(args.host);
   } catch (error) {
-    process.stderr.write(`错误 / Error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `错误 / Error: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
     return 2;
   }
 
@@ -200,7 +208,9 @@ async function main(): Promise<number> {
     return 0;
   } catch (error) {
     if (error instanceof CsvFormatError) {
-      process.stderr.write(`CSV 格式错误 / CSV format error:\n${error.message}\n`);
+      process.stderr.write(
+        `CSV 格式错误 / CSV format error:\n${error.message}\n`,
+      );
       return 1;
     }
     process.stderr.write(
@@ -214,7 +224,7 @@ main()
   .then((code) => process.exit(code))
   .catch((error) => {
     process.stderr.write(
-      `未捕获错误 / Unexpected error:\n${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+      `未捕获错误 / Unexpected error:\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
     );
     process.exit(1);
   });

@@ -1,16 +1,4 @@
-/**
- * Host configuration.
- *
- * The cookie-direct image engine talks to TickTick's *internal* (unofficial)
- * v2 web API. The original implementation hardcoded the dida365.com (国内 /
- * Mainland China) endpoints, which is the only path that has actually been
- * verified to work.
- *
- * We expose `ticktick` (海外 / overseas, dida365's international sibling) as an
- * EXPERIMENTAL, UNVERIFIED option. The domains below are best-effort guesses;
- * cookie domains, CSRF behaviour and the attachment endpoints may differ. Treat
- * `--host ticktick --with-images` as "may simply not work".
- */
+/** Official site endpoints; both sites have real attachment API samples verified. */
 
 export type HostId = "dida365" | "ticktick";
 
@@ -41,10 +29,10 @@ const HOSTS: Record<HostId, HostConfig> = {
     hl: "zh_CN",
     tz: "Asia/Shanghai",
   },
-  // 海外 / overseas — EXPERIMENTAL, endpoints unverified.
+  // International site: real CSV attachment verified on 2026-10-02.
   ticktick: {
     id: "ticktick",
-    imagesVerified: false,
+    imagesVerified: true,
     webUrl: "https://ticktick.com",
     apiUrl: "https://api.ticktick.com",
     cookieHostSuffix: "ticktick.com",
@@ -58,6 +46,6 @@ export function resolveHost(id: string): HostConfig {
     return HOSTS[id];
   }
   throw new Error(
-    `Unknown --host "${id}". Expected "dida365" (国内, verified) or "ticktick" (海外, experimental).`,
+    `Unknown --host "${id}". Expected "dida365" (中国站) or "ticktick" (国际站).`,
   );
 }

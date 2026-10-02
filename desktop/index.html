@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#193e38" />
+    <title>滴答清单备份助手 · Markdown 导出</title>
+    <link rel="icon" href="logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <svg
+      class="icon-defs"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M5 12h14m-6-6 6 6-6 6" />
+      </symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24">
+        <path
+          d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+        />
+      </symbol>
+      <symbol id="i-file" viewBox="0 0 24 24">
+        <path
+          d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zm0 0v6h6M8 13h8m-8 4h5"
+        />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6zm-4 9 3 3 5-6" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="m5 12 4 4L19 6" />
+      </symbol>
+      <symbol id="i-download" viewBox="0 0 24 24">
+        <path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" />
+      </symbol>
+    </svg>
+    <main>
+      <nav class="topbar" aria-label="应用信息">
+        <div class="brand">
+          <img src="logo.svg" alt="原创归档盒标识" width="34" height="34" />
+          <strong>滴答清单备份助手</strong>
+        </div>
+      </nav>
+      <header class="hero">
+        <div>
+          <h1>任务、图片、附件，一起带走。</h1>
+          <p>
+            导出 Markdown，在 Obsidian 或本地继续使用。<br />
+            官方 CSV 不包含图片和附件，这里一起备份。
+          </p>
+        </div>
+      </header>
+      <div id="preview-notice" class="notice" hidden>
+        界面预览 · 保存位置与官方登录请在桌面应用中操作。
+      </div>
+      <div class="workspace">
+        <section class="card setup-card" aria-label="备份设置">
+          <div class="field">
+            <label for="host">账号站点</label>
+            <div class="select-wrap">
+              <select id="host">
+                <option value="dida365">滴答清单 · 中国站</option>
+                <option value="ticktick">TickTick · 国际站</option>
+              </select>
+            </div>
+            <p id="connection" class="connection" hidden>
+              <span class="connection-dot"></span
+              ><span id="connection-text">已连接</span>
+            </p>
+          </div>
+          <div class="field destination-field">
+            <div class="field-label">
+              <label id="destination-label">保存位置</label>
+            </div>
+            <button
+              id="choose-location"
+              class="location-button"
+              aria-labelledby="destination-label destination-name"
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg
+              ><span class="location-text"
+                ><strong id="destination-name">选择保存位置</strong
+                ><span id="destination-directory" hidden></span></span
+              ><span id="location-action"
+                >选择<svg class="icon" aria-hidden="true">
+                  <use href="#i-arrow" /></svg
+              ></span>
+            </button>
+          </div>
+          <button id="start" class="primary-button">
+            开始备份<svg class="icon" aria-hidden="true">
+              <use href="#i-arrow" />
+            </svg>
+          </button>
+          <p class="trust-note">
+            <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
+            官方网页登录，不修改源内容。
+          </p>
+        </section>
+        <section
+          id="progress-card"
+          class="card progress-card"
+          aria-labelledby="progress-title"
+          data-state="idle"
+        >
+          <div class="card-heading">
+            <div>
+              <h2 id="progress-title">导出进度</h2>
+            </div>
+            <span id="state-badge" class="state-badge">未开始</span>
+          </div>
+          <div id="progress-view">
+            <ol id="steps" class="steps" aria-label="导出阶段">
+              <li data-step="login">
+                <span class="step-marker">1</span>
+                <div>
+                  <strong>连接官方账号</strong>
+                </div>
+              </li>
+              <li data-step="preparing">
+                <span class="step-marker">2</span>
+                <div>
+                  <strong>获取任务备份</strong>
+                </div>
+              </li>
+              <li data-step="attachments">
+                <span class="step-marker">3</span>
+                <div>
+                  <strong>查找并下载附件</strong>
+                </div>
+              </li>
+              <li data-step="packing">
+                <span class="step-marker">4</span>
+                <div>
+                  <strong>生成笔记并保存</strong>
+                </div>
+              </li>
+            </ol>
+            <div
+              class="status-box"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <strong id="stage">准备就绪</strong>
+              <p id="status">
+                登录后，自动完成备份。
+              </p>
+            </div>
+          </div>
+          <div
+            id="result"
+            class="result-view"
+            aria-labelledby="result-title"
+            tabindex="-1"
+            hidden
+          >
+            <div class="result-heading">
+              <h3 id="result-title">你的笔记库已保存</h3>
+              <span id="result-label"></span>
+            </div>
+            <dl class="metrics">
+              <div>
+                <dd id="count-tasks">—</dd>
+                <dt>任务</dt>
+              </div>
+              <div>
+                <dd id="count-notes">—</dd>
+                <dt>笔记</dt>
+              </div>
+              <div>
+                <dd id="count-lists">—</dd>
+                <dt>清单</dt>
+              </div>
+              <div>
+                <dd id="count-files">—</dd>
+                <dt>附件已下载 / 总数</dt>
+              </div>
+            </dl>
+            <p id="summary" class="result-summary"></p>
+            <div id="gap-details" hidden>
+              <button
+                id="gap-summary"
+                class="gap-button"
+                aria-haspopup="dialog"
+              >
+                查看未完成项目
+              </button>
+            </div>
+            <div class="result-actions">
+              <button id="reveal" class="primary-button small" hidden>
+                <svg class="icon" aria-hidden="true">
+                  <use href="#i-folder" /></svg
+                >在文件夹中查看</button
+              ><button id="save-again" class="secondary-button" hidden>
+                保存已有备份</button
+              ><button id="retry" class="secondary-button" hidden>
+                重试未完成项
+              </button>
+            </div>
+            <p id="result-action-status" class="field-hint" role="status"></p>
+          </div>
+          <div class="progress-actions">
+            <button id="show-login" class="text-button" hidden>
+              返回官方登录窗口<svg class="icon" aria-hidden="true">
+                <use href="#i-arrow" />
+              </svg></button
+            ><button
+              id="error-details"
+              class="text-button"
+              aria-haspopup="dialog"
+              hidden
+            >
+              查看错误详情</button
+            ><button id="cancel" class="text-button danger" hidden>
+              取消导出
+            </button>
+          </div>
+        </section>
+      </div>
+      <footer>
+        <span>独立开发，与滴答清单 / TickTick 无隶属关系</span
+        ><button id="help-open" class="text-button" aria-haspopup="dialog">
+          备份包含什么？</button
+        ><span>v1.0.0</span>
+      </footer>
+    </main>
+    <dialog id="help-dialog">
+      <h2>一份可以带走的笔记库</h2>
+      <p>
+        ZIP 解压后，每条任务或笔记对应一个 Markdown 文档，按清单整理。官方 CSV
+        不包含图片和附件；本工具会另外下载附件并提供本地链接。
+      </p>
+      <p>
+        可在 Obsidian 中打开解压后的文件夹，也可使用其他支持 Markdown
+        的工具阅读。不同工具对任务状态、提醒等字段的支持可能不同。
+      </p>
+      <p>
+        优先保留官方 CSV；生成备份受限时，从任务接口导出，并附原始 JSON
+        和来源说明。附件通过未公开接口获取，失败项会列在结果和 manifest.json
+        中。同一次应用会话内重试可复用已下载附件，关闭应用后不支持断点续传。
+      </p>
+      <form method="dialog">
+        <button class="primary-button small">知道了</button>
+      </form>
+    </dialog>
+    <dialog id="gap-dialog">
+      <h2>未完成的导出项目</h2>
+      <p>文字与已下载附件仍会保留，以下项目需要检查或重试。</p>
+      <ul id="gaps"></ul>
+      <form method="dialog">
+        <button class="primary-button small">返回结果</button>
+      </form>
+    </dialog>
+    <dialog id="error-dialog">
+      <h2>错误详情</h2>
+      <p id="error-text"></p>
+      <form method="dialog">
+        <button class="primary-button small">返回</button>
+      </form>
+    </dialog>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

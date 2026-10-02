@@ -15,7 +15,9 @@ import type { HostConfig } from "../../src/lib/host.js";
 import type { EngineApi } from "../../src/lib/enrich.js";
 import {
   attachmentsFromTaskRecord,
-  buildCompletedWindowPath,
+  fetchCompletedWindowComplete,
+  snapshotFromBatch,
+  parseProjectTasksResponse,
   type CookieMap,
   type EngineAttachment,
   type EngineProject,
@@ -112,46 +114,7 @@ async function loadSnapshot(host: HostConfig): Promise<EngineSnapshot> {
   }
 
   const batch = await fetchJson("/api/v2/batch/check/0", cookies, host);
-  const batchRecord = (batch && typeof batch === "object" ? batch : {}) as RawRecord;
-
-  const projectProfiles = Array.isArray(batchRecord.projectProfiles)
-    ? (batchRecord.projectProfiles as RawRecord[])
-    : [];
-  const projects: EngineProject[] = projectProfiles
-    .map((project) =>
-      typeof project.id === "string" && typeof project.name === "string"
-        ? { id: project.id, name: project.name }
-        : null,
-    )
-    .filter((item): item is EngineProject => item !== null);
-
-  const syncTaskBean =
-    batchRecord.syncTaskBean && typeof batchRecord.syncTaskBean === "object"
-      ? (batchRecord.syncTaskBean as RawRecord)
-      : {};
-  const openTasks = Array.isArray(syncTaskBean.update)
-    ? (syncTaskBean.update as RawRecord[])
-    : [];
-
-  const projectIdByTaskId = new Map<string, string>();
-  const openTasksByProject = new Map<string, RawRecord[]>();
-  for (const task of openTasks) {
-    if (typeof task.id === "string" && typeof task.projectId === "string") {
-      projectIdByTaskId.set(task.id, task.projectId);
-      const list = openTasksByProject.get(task.projectId);
-      if (list) list.push(task);
-      else openTasksByProject.set(task.projectId, [task]);
-    }
-  }
-
-  return {
-    cookies,
-    host,
-    fetchImpl: fetch,
-    projects,
-    projectIdByTaskId,
-    openTasksByProject,
-  };
+  return snapshotFromBatch(batch, { cookies, host, fetchImpl: fetch });
 }
 
 /** ±168h 已完成窗口取任务（路径构造走 image-api，平台无关）。 */
@@ -159,20 +122,15 @@ async function fetchCompletedTasksInWindow(
   snapshot: EngineSnapshot,
   projectId: string,
   centerIso: string,
-  options: { windowHours?: number; global?: boolean } = {},
+  options: {
+    windowHours?: number;
+    global?: boolean;
+    status?: "Abandoned";
+  } = {},
 ): Promise<RawRecord[]> {
-  const path = buildCompletedWindowPath(projectId, centerIso, options);
-  if (!path) return [];
-  try {
-    const res = await fetchJson(path, snapshot.cookies, snapshot.host);
-    return Array.isArray(res)
-      ? (res as RawRecord[])
-      : res && typeof res === "object" && Array.isArray((res as RawRecord).tasks)
-        ? ((res as RawRecord).tasks as RawRecord[])
-        : [];
-  } catch {
-    return [];
-  }
+  return fetchCompletedWindowComplete(projectId, centerIso, options, (path) =>
+    fetchJson(path, snapshot.cookies, snapshot.host),
+  );
 }
 
 /** 第二次 GET：下载附件字节。 */
@@ -201,6 +159,14 @@ async function downloadAttachmentBytes(
 export function createBrowserEngine(host: HostConfig): EngineApi {
   return {
     loadSnapshot: () => loadSnapshot(host),
+    fetchProjectTasks: async (snapshot, projectId) =>
+      parseProjectTasksResponse(
+        await fetchJson(
+          `/api/v2/project/${encodeURIComponent(projectId)}/tasks`,
+          snapshot.cookies,
+          snapshot.host,
+        ),
+      ),
     fetchCompletedTasksInWindow,
     attachmentsFromTaskRecord,
     downloadAttachmentBytes,

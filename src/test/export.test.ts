@@ -54,7 +54,7 @@ test("--with-images with injected engine downloads and links an attachment", asy
     const pngBytes = Buffer.from("FAKEPNG");
 
     // The CSV taskId ("task-1") is an export-local index, not the backend id,
-    // so the engine recovers the task by TITLE from the ±168h completed window.
+    // so the engine recovers this open task uniquely within its project.
     const completedTask = {
       id: "backend-task-1",
       projectId: "p1",
@@ -75,13 +75,13 @@ test("--with-images with injected engine downloads and links an attachment", asy
       if (url.includes("/api/v2/batch/check/0")) {
         return jsonResponse({
           projectProfiles: [{ id: "p1", name: "Roadmap" }],
-          syncTaskBean: { update: [] },
+          syncTaskBean: { update: [completedTask] },
         });
       }
       if (url.includes("/completed")) {
         return jsonResponse([completedTask]);
       }
-      if (url.includes("/download/att-1")) {
+      if (url.includes("/api/v1/attachment/p1/backend-task-1/att-1")) {
         return new Response(pngBytes, { status: 200 });
       }
       return new Response("not found", { status: 404 });

@@ -24,6 +24,7 @@ export const ManifestAttachmentSchema = z.object({
 export const ManifestTaskSchema = z.object({
   id: z.string(),
   sourceTaskId: z.string().nullable(),
+  apiTaskId: z.string().optional(),
   title: z.string(),
   kind: z.enum(["task", "note"]),
   status: z.enum(["todo", "done", "canceled"]),
@@ -50,6 +51,10 @@ export const ManifestGapSchema = z.object({
     "task_attachment_unreachable",
     "attachment_download_failed",
     "account_mismatch",
+    "task_match_ambiguous",
+    "completed_scan_incomplete",
+    "export_canceled",
+    "official_backup_unavailable",
   ]),
   /** Human-readable explanation. */
   message: z.string(),
@@ -68,6 +73,9 @@ export const ManifestSchema = z.object({
   source: z.object({
     host: z.enum(["dida365", "ticktick"]),
     csvPath: z.string(),
+    csvFile: z.literal("backup.csv").optional(),
+    method: z.enum(["official-csv", "api"]).optional(),
+    apiFile: z.literal("api-snapshot.json").optional(),
     withImages: z.boolean(),
     imagesVerifiedHost: z.boolean(),
   }),

@@ -17,11 +17,16 @@ import {
   attachmentsFromTaskRecord,
   downloadAttachmentBytes,
   fetchCompletedTasksInWindow,
+  fetchProjectTasks,
   loadEngineSnapshot,
   type CookieMap,
 } from "./image-engine.js";
 import type { ManifestGap } from "./manifest.js";
-import { buildVault, type ResolvedAttachment, type VaultPlan } from "./vault.js";
+import {
+  buildVault,
+  type ResolvedAttachment,
+  type VaultPlan,
+} from "./vault.js";
 
 export interface ExportOptions {
   csvPath: string;
@@ -54,6 +59,7 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
 
   const attachmentsByTask = new Map<string, ResolvedAttachment[]>();
   const gaps: ManifestGap[] = [];
+  const apiTaskIds = new Map<string, string>();
 
   if (!options.withImages) {
     gaps.push({
@@ -75,13 +81,14 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
       if (!options.host.imagesVerified) {
         gaps.push({
           code: "images_skipped_overseas_unverified",
-          message:
-            `--host ${options.host.id} 的图片直连路径未经验证（实验性，海外接口/cookie 域可能不同），可能无法取到任何图片。`,
+          message: `--host ${options.host.id} 的图片直连路径未经验证（实验性，海外接口/cookie 域可能不同），可能无法取到任何图片。`,
         });
         log(`警告：--host ${options.host.id} 取图为实验性，未验证。`);
       }
 
-      log("正在从 Chrome 读取登录 cookie 并枚举项目…（可能弹出 Keychain 授权框）");
+      log(
+        "正在从 Chrome 读取登录 cookie 并枚举项目…（可能弹出 Keychain 授权框）",
+      );
 
       // Node-side engine: Chrome-cookie snapshot + Node fetch. The cross-
       // platform orchestration lives in enrichWithImages.
@@ -95,6 +102,7 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
               : {}),
           }),
         fetchCompletedTasksInWindow,
+        fetchProjectTasks,
         attachmentsFromTaskRecord,
         downloadAttachmentBytes,
       };
@@ -104,6 +112,7 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
         attachmentsByTask.set(taskId, atts);
       }
       gaps.push(...result.gaps);
+      for (const [id, apiId] of result.apiTaskIds) apiTaskIds.set(id, apiId);
     }
   }
 
@@ -111,6 +120,8 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
     csv,
     host: options.host,
     csvPath: options.csvPath,
+    rawCsv: csvText,
+    apiTaskIds,
     withImages: options.withImages,
     toolVersion: options.toolVersion,
     attachmentsByTask,

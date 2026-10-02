@@ -14,14 +14,14 @@ import type { ManifestGap } from "../../src/lib/manifest.js";
 import { createBrowserEngine } from "./engine.js";
 import { zipVaultPlan, triggerDownload } from "./zip.js";
 
-const TOOL_VERSION = "0.1.0";
+const TOOL_VERSION = "1.0.0";
 
 type Lang = "zh" | "en";
 
 const I18N: Record<Lang, Record<string, string>> = {
   zh: {
-    title: "滴答清单导出 Markdown",
-    subtitle: "任务数据 → Markdown，可用于 Obsidian 等笔记软件",
+    title: "滴答清单备份助手",
+    subtitle: "官方 CSV 不含图片和附件；这里可导出 Markdown 与附件",
     hostCn: "中国站",
     hostEn: "全球站",
     step1Title: "① 从滴答清单导出数据",
@@ -31,21 +31,21 @@ const I18N: Record<Lang, Record<string, string>> = {
     step1Download: "下载得到 CSV 文件",
     step2Title: "② 导出成 Markdown",
     csvHint:
-      "选择上一步得到的 CSV 文件，即可生成一套带 YAML frontmatter 的 Markdown 笔记，可直接用于 Obsidian 等软件。如需连同附件图片一并导出，请勾选下方选项。",
+      "选择上一步得到的 CSV 文件，即可生成一套带 YAML frontmatter 的 Markdown 笔记，可直接用于 Obsidian 等软件。如需连同图片和文件附件一并导出，请勾选下方选项。",
     csvLabel: "选择 CSV 文件",
-    withImages: "同步获取附件图片（需本浏览器已登录滴答清单网页版）",
+    withImages: "同步获取图片和文件附件（需本浏览器已登录滴答清单网页版）",
     download: "下载",
     processing: "处理中…",
     selectCsvWarn: "请先选择 CSV 文件",
     parsed: "CSV 解析完成：{tasks} 个任务 / {lists} 个清单",
-    fetching: "正在获取图片…",
+    fetching: "正在获取图片与文件附件…",
     done: "完成：{tasks} 个任务{gapClause}",
     doneGap: "，{gaps} 项没拿到",
     error: "出错了：{msg}",
   },
   en: {
-    title: "TickTick to Markdown",
-    subtitle: "Task data → Markdown, works with Obsidian & co.",
+    title: "滴答清单备份助手",
+    subtitle: "Official CSV omits images and attachments; export Markdown with files.",
     hostCn: "China",
     hostEn: "Global",
     step1Title: "① Export from TickTick",
@@ -55,14 +55,15 @@ const I18N: Record<Lang, Record<string, string>> = {
     step1Download: "Download the CSV file",
     step2Title: "② Export to Markdown",
     csvHint:
-      "Choose the CSV file from the previous step to generate a set of Markdown notes with YAML frontmatter, ready for Obsidian & co. To export attachment images as well, tick the option below.",
+      "Choose the CSV file from the previous step to generate a set of Markdown notes with YAML frontmatter, ready for Obsidian & co. To export images and file attachments as well, tick the option below.",
     csvLabel: "Choose CSV file",
-    withImages: "Also fetch attachment images (requires being logged in to TickTick web in this browser)",
+    withImages:
+      "Also fetch images and file attachments (requires being logged in to TickTick web in this browser)",
     download: "Download",
     processing: "Processing…",
     selectCsvWarn: "Please choose a CSV file first",
     parsed: "CSV parsed: {tasks} tasks / {lists} lists",
-    fetching: "Fetching images…",
+    fetching: "Fetching images and files…",
     done: "Done: {tasks} tasks{gapClause}",
     doneGap: ", {gaps} missed",
     error: "Error: {msg}",
@@ -134,7 +135,8 @@ async function run(): Promise<void> {
 
   setBusy(true);
   try {
-    const csv = parseDidaCsv(await file.text());
+    const rawCsv = await file.text();
+    const csv = parseDidaCsv(rawCsv);
     setStatus(
       t("parsed", {
         tasks: csv.summary.importedTasks,
@@ -144,6 +146,7 @@ async function run(): Promise<void> {
 
     const attachmentsByTask = new Map<string, ResolvedAttachment[]>();
     const gaps: ManifestGap[] = [];
+    const apiTaskIds = new Map<string, string>();
 
     if (withImages) {
       setStatus(t("fetching"));
@@ -154,6 +157,7 @@ async function run(): Promise<void> {
         attachmentsByTask.set(id, atts);
       }
       gaps.push(...result.gaps);
+      for (const [id, apiId] of result.apiTaskIds) apiTaskIds.set(id, apiId);
     } else {
       gaps.push({
         code: "images_disabled",
@@ -165,6 +169,8 @@ async function run(): Promise<void> {
       csv,
       host,
       csvPath: file.name,
+      rawCsv,
+      apiTaskIds,
       withImages,
       toolVersion: TOOL_VERSION,
       attachmentsByTask,
@@ -177,7 +183,10 @@ async function run(): Promise<void> {
 
     const gapCount = plan.manifest.gaps.length;
     const gapClause = gapCount > 0 ? t("doneGap", { gaps: gapCount }) : "";
-    setStatus(t("done", { tasks: plan.manifest.counts.tasks, gapClause }), "ok");
+    setStatus(
+      t("done", { tasks: plan.manifest.counts.tasks, gapClause }),
+      "ok",
+    );
   } catch (error) {
     setStatus(
       t("error", {

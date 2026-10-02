@@ -1,11 +1,11 @@
 /**
- * Cookie-direct image engine — macOS + Chrome + dida365 only (Node side).
+ * Cookie-direct image engine — macOS + Chrome (Node side).
  *
  * Talks to TickTick's *internal / unofficial* web v2 API using the login cookie
  * it reads out of your local Chrome profile. It is:
  *   - macOS only (uses Keychain `security` + Chrome Safe Storage),
  *   - Chrome only (reads Chrome's Cookies SQLite DB),
- *   - verified only against dida365 (国内). ticktick (海外) is experimental.
+ *   - real attachment API samples verified on dida365 and ticktick; full flows are assessed separately.
  *
  * The API is unofficial and may break at any time. Use at your own risk.
  *
@@ -29,7 +29,9 @@ import { promisify } from "node:util";
 import type { HostConfig } from "./host.js";
 import {
   attachmentsFromTaskRecord,
-  buildCompletedWindowPath,
+  fetchCompletedWindowComplete,
+  snapshotFromBatch,
+  parseProjectTasksResponse,
   normalizeAttachments,
   type CookieMap,
   type EngineAttachment,
@@ -175,7 +177,9 @@ async function readChromeCookieRows(host: HostConfig) {
   }
 }
 
-export async function loadCookiesFromChrome(host: HostConfig): Promise<CookieMap> {
+export async function loadCookiesFromChrome(
+  host: HostConfig,
+): Promise<CookieMap> {
   if (platform() !== "darwin") {
     throw new ImageEngineError(
       "--with-images 只支持 macOS（需要 Keychain + Chrome Safe Storage）。" +
@@ -219,7 +223,10 @@ function createTraceId(): string {
   return randomUUID().replace(/-/g, "");
 }
 
-function buildHeaders(cookies: CookieMap, host: HostConfig): Record<string, string> {
+function buildHeaders(
+  cookies: CookieMap,
+  host: HostConfig,
+): Record<string, string> {
   const csrfToken = cookies._csrf_token ?? "";
   return {
     Accept: "application/json, text/plain, */*",
@@ -318,49 +325,28 @@ export async function loadEngineSnapshot(
     );
   }
 
-  const batch = await fetchJson("/api/v2/batch/check/0", cookies, host, fetchImpl);
-  const batchRecord = (batch && typeof batch === "object" ? batch : {}) as RawRecord;
-
-  const projectProfiles = Array.isArray(batchRecord.projectProfiles)
-    ? (batchRecord.projectProfiles as RawRecord[])
-    : [];
-
-  const projects: EngineProject[] = projectProfiles
-    .map<EngineProject | null>((project) => {
-      if (typeof project.id !== "string" || typeof project.name !== "string") {
-        return null;
-      }
-      return { id: project.id, name: project.name };
-    })
-    .filter((item): item is EngineProject => item !== null);
-
-  const syncTaskBean =
-    batchRecord.syncTaskBean && typeof batchRecord.syncTaskBean === "object"
-      ? (batchRecord.syncTaskBean as RawRecord)
-      : {};
-  const openTasks = Array.isArray(syncTaskBean.update)
-    ? (syncTaskBean.update as RawRecord[])
-    : [];
-
-  const projectIdByTaskId = new Map<string, string>();
-  const openTasksByProject = new Map<string, RawRecord[]>();
-  for (const task of openTasks) {
-    if (typeof task.id === "string" && typeof task.projectId === "string") {
-      projectIdByTaskId.set(task.id, task.projectId);
-      const list = openTasksByProject.get(task.projectId);
-      if (list) list.push(task);
-      else openTasksByProject.set(task.projectId, [task]);
-    }
-  }
-
-  return {
+  const batch = await fetchJson(
+    "/api/v2/batch/check/0",
     cookies,
     host,
     fetchImpl,
-    projects,
-    projectIdByTaskId,
-    openTasksByProject,
-  };
+  );
+  return snapshotFromBatch(batch, { cookies, host, fetchImpl });
+}
+
+/** Fetch the full project task list, including archived lists omitted from batch. */
+export async function fetchProjectTasks(
+  snapshot: EngineSnapshot,
+  projectId: string,
+): Promise<RawRecord[]> {
+  return parseProjectTasksResponse(
+    await fetchJson(
+      `/api/v2/project/${encodeURIComponent(projectId)}/tasks`,
+      snapshot.cookies,
+      snapshot.host,
+      snapshot.fetchImpl,
+    ),
+  );
 }
 
 /**
@@ -372,73 +358,39 @@ export async function fetchCompletedTasksInWindow(
   snapshot: EngineSnapshot,
   projectId: string,
   centerIso: string,
-  options: { windowHours?: number; global?: boolean } = {},
+  options: {
+    windowHours?: number;
+    global?: boolean;
+    status?: "Abandoned";
+  } = {},
 ): Promise<RawRecord[]> {
-  const path = buildCompletedWindowPath(projectId, centerIso, options);
-  if (!path) return [];
-
-  try {
-    const res = await fetchJson(
-      path,
-      snapshot.cookies,
-      snapshot.host,
-      snapshot.fetchImpl,
-    );
-    return Array.isArray(res)
-      ? (res as RawRecord[])
-      : res && typeof res === "object" && Array.isArray((res as RawRecord).tasks)
-        ? ((res as RawRecord).tasks as RawRecord[])
-        : [];
-  } catch {
-    return [];
-  }
+  return fetchCompletedWindowComplete(projectId, centerIso, options, (path) =>
+    fetchJson(path, snapshot.cookies, snapshot.host, snapshot.fetchImpl),
+  );
 }
 
-/**
- * Fetch attachment metadata for a single task id. Returns [] when the task is
- * not reachable. Errors are swallowed into [] so a single bad task can't abort
- * the whole export; callers track misses via the manifest gaps.
- */
+/** Legacy metadata API, retained for CLI clients; errors stay distinguishable from empty attachments. */
 export async function fetchTaskAttachments(
   snapshot: EngineSnapshot,
   taskId: string,
   projectIdHint?: string | null,
 ): Promise<EngineAttachment[]> {
   const projectId = projectIdHint || snapshot.projectIdByTaskId.get(taskId);
-  if (!projectId) return [];
-
-  const { cookies, host, fetchImpl } = snapshot;
-
-  try {
-    const detail = await fetchJson(
-      `/api/v2/project/${projectId}/task/${taskId}`,
-      cookies,
-      host,
-      fetchImpl,
-    );
-    const detailRecord =
-      detail && typeof detail === "object" ? (detail as RawRecord) : {};
-    let attachments = normalizeAttachments(
-      detailRecord.attachments,
-      host,
-      taskId,
-      projectId,
-    );
-
-    if (attachments.length === 0) {
-      const fallback = await fetchJson(
-        `/api/v2/task/${taskId}/attachments`,
-        cookies,
-        host,
-        fetchImpl,
-      ).catch(() => null);
-      attachments = normalizeAttachments(fallback, host, taskId, projectId);
-    }
-
-    return attachments;
-  } catch {
-    return [];
-  }
+  if (!projectId) throw new ImageEngineError("Task project is unknown");
+  const detail = await fetchJson(
+    `/api/v2/task/${encodeURIComponent(taskId)}?projectId=${encodeURIComponent(projectId)}`,
+    snapshot.cookies,
+    snapshot.host,
+    snapshot.fetchImpl,
+  );
+  if (!detail || typeof detail !== "object" || Array.isArray(detail))
+    throw new ImageEngineError("Invalid task response");
+  return normalizeAttachments(
+    (detail as RawRecord).attachments,
+    snapshot.host,
+    taskId,
+    projectId,
+  );
 }
 
 /** Second GET: download the raw bytes of an attachment. */
@@ -447,10 +399,29 @@ export async function downloadAttachmentBytes(
   attachment: EngineAttachment,
 ): Promise<Uint8Array> {
   const headers = buildHeaders(snapshot.cookies, snapshot.host);
-  const response = await snapshot.fetchImpl(attachment.url, {
+  const url = new URL(attachment.url);
+  if (
+    url.origin !== snapshot.host.apiUrl ||
+    !url.pathname.startsWith("/api/v1/attachment/")
+  )
+    throw new ImageEngineError("Unsafe attachment URL");
+  let response = await snapshot.fetchImpl(url.href, {
     method: "GET",
     headers,
+    redirect: "manual",
   });
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location");
+    if (!location) throw new ImageEngineError("Missing attachment redirect");
+    const target = new URL(location, url);
+    if (target.protocol !== "https:")
+      throw new ImageEngineError("Unsafe redirect");
+    // Signed object-storage URLs are fetched without the account cookie or CSRF token.
+    response = await snapshot.fetchImpl(target.href, {
+      method: "GET",
+      redirect: "error",
+    });
+  }
   if (!response.ok) {
     throw new ImageEngineError(
       `下载附件失败 ${attachment.name} (HTTP ${response.status})`,

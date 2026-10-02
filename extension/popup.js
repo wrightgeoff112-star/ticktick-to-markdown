@@ -2650,8 +2650,8 @@
   function trimValue(value) {
     return String(value ?? "").replace(/^﻿/, "").trim();
   }
-  function decodeDidaEscapedMultilineValue(value) {
-    return value.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n");
+  function decodeDidaMultilineValue(value) {
+    return value.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\r\n?/g, "\n");
   }
   function findHeaderIndex(rows) {
     for (let i = 0; i < rows.length; i += 1) {
@@ -2682,9 +2682,10 @@
   function normalizeTaskStatus(input) {
     const n = toNumber(input.rawStatus);
     if (n === -1) return "canceled";
+    if (n === 0) return "todo";
+    if (n === 2 || n === 1) return "done";
     const hasCompletedTime = input.completedTime.trim().length > 0;
     if (hasCompletedTime) return "done";
-    if (n === 1 || n === 2) return "done";
     return "todo";
   }
   function normalizeKind(rawKind) {
@@ -2794,13 +2795,13 @@
       });
       const startDate = toIsoInstant(trimValue(row["Start Date"]));
       const dueDate = toIsoInstant(trimValue(row["Due Date"]));
-      const completedTime = status === "done" ? toIsoInstant(rawCompletedTime) : null;
+      const completedTime = status !== "todo" ? toIsoInstant(rawCompletedTime) : null;
       const createdTime = toIsoInstant(trimValue(row["Created Time"]));
       const isAllDay = trimValue(row["Is All Day"]).toLowerCase() === "true";
       const timezone = trimValue(row.Timezone) || "Asia/Shanghai";
       const tags = splitTags(trimValue(row.Tags));
       const contentRaw = trimValue(row.Content);
-      const content = contentRaw ? decodeDidaEscapedMultilineValue(contentRaw) : null;
+      const content = contentRaw ? decodeDidaMultilineValue(contentRaw) : null;
       const attachmentRefs = content ? extractAttachmentRefs(content) : [];
       const reminderRules = parseDidaReminderRules(trimValue(row.Reminder), {
         isAllDay
@@ -2857,168 +2858,233 @@
   }
 
   // src/lib/enrich.ts
+  function instant(value) {
+    const n = typeof value === "string" ? Date.parse(value) : NaN;
+    return Number.isFinite(n) ? n : null;
+  }
+  function choose(task, records, engine, snapshot) {
+    const real = records.filter((r) => r.id === task.sourceTaskId);
+    if (real.length) return real;
+    const refs = task.attachmentRefs;
+    if (refs.length) {
+      const hits2 = records.filter(
+        (r) => engine.attachmentsFromTaskRecord(snapshot, r).some((a) => refs.some((ref) => ref.split(/[/?#]/).includes(a.id)))
+      );
+      if (hits2.length) return hits2;
+    }
+    let hits = records.filter(
+      (r) => String(r.title ?? "").trim() === task.title.trim()
+    );
+    for (const [csvTime, field] of [
+      [task.createdTime, "createdTime"],
+      [task.completedTime, "completedTime"]
+    ]) {
+      if (csvTime) {
+        const time = instant(csvTime);
+        hits = hits.filter(
+          (r) => instant(r[field]) === null || instant(r[field]) === time
+        );
+      }
+    }
+    return hits;
+  }
   async function enrichWithImages(csv, engine, options = {}) {
     const log = options.onProgress ?? (() => {
     });
-    const attachmentsByTask = /* @__PURE__ */ new Map();
+    const attachmentsByTask = new Map(
+      [...options.previous?.attachmentsByTask ?? []].map(([id, atts]) => [
+        id,
+        atts.filter((a) => a.bytes || a.diskHandle)
+      ])
+    );
+    const apiTaskIds = new Map(options.previous?.apiTaskIds);
     const gaps = [];
+    const result = { attachmentsByTask, apiTaskIds, gaps };
+    const canceled = () => {
+      if (options.signal?.aborted) {
+        if (!gaps.some((g) => g.code === "export_canceled"))
+          gaps.push({
+            code: "export_canceled",
+            message: "\u5DF2\u53D6\u6D88\uFF0C\u9644\u4EF6\u626B\u63CF\u6216\u4E0B\u8F7D\u672A\u5B8C\u6210\u3002"
+          });
+        return true;
+      }
+      return false;
+    };
     log("\u6B63\u5728\u8FDE\u63A5\u8D26\u53F7\u3001\u679A\u4E3E\u9879\u76EE\u2026");
     let snapshot;
     try {
       snapshot = await engine.loadSnapshot();
-    } catch (error) {
+    } catch {
       gaps.push({
         code: "image_engine_failed",
-        message: `\u56FE\u7247\u5F15\u64CE\u5931\u8D25\uFF0C\u5DF2\u56DE\u9000\u4E3A\u65E0\u56FE\u5BFC\u51FA\uFF1A${error instanceof Error ? error.message : String(error)}`
+        message: "\u65E0\u6CD5\u8FDE\u63A5\u9644\u4EF6\u63A5\u53E3\u3002\u8BF7\u68C0\u67E5\u767B\u5F55\u72B6\u6001\u5E76\u91CD\u8BD5\uFF1B\u9644\u4EF6\u8986\u76D6\u5C1A\u672A\u6838\u5B9E\u3002"
       });
-      log(
-        `\u56FE\u7247\u5F15\u64CE\u5931\u8D25\uFF0C\u56DE\u9000\u4E3A\u65E0\u56FE\u5BFC\u51FA\u3002\u539F\u56E0\uFF1A${error instanceof Error ? error.message : String(error)}`
-      );
-      return { attachmentsByTask, gaps };
+      return result;
     }
-    log(`\u5DF2\u8FDE\u63A5\uFF0C\u53D1\u73B0 ${snapshot.projects.length} \u4E2A\u9879\u76EE\uFF0C\u5F00\u59CB\u5B9A\u4F4D\u9644\u4EF6\u2026`);
-    const csvListTitles = new Set(
-      csv.lists.map((l) => l.title.trim()).filter(Boolean)
-    );
-    if (csvListTitles.size > 0 && snapshot.projects.length > 0) {
-      const projectNames = new Set(snapshot.projects.map((p) => p.name.trim()));
-      let matched = 0;
-      for (const t2 of csvListTitles) if (projectNames.has(t2)) matched += 1;
-      const overlap = matched / csvListTitles.size;
-      if (overlap < 0.5) {
-        const warn = `\u26A0\uFE0F \u8D26\u53F7\u5339\u914D\u9884\u8B66\uFF1ACSV \u6709 ${csvListTitles.size} \u4E2A\u6E05\u5355\uFF0C\u5F53\u524D\u767B\u5F55\u8D26\u53F7\u53EA\u5BF9\u5F97\u4E0A ${matched} \u4E2A\uFF08${Math.round(overlap * 100)}%\uFF09\u3002\u53EF\u80FD\u767B\u9519\u8D26\u53F7\u6216\u9009\u9519 Chrome\u2014\u2014\u7EE7\u7EED\u591A\u534A\u53D6\u4E0D\u5230\u56FE\u3002`;
-        gaps.push({ code: "account_mismatch", message: warn });
-        log(warn);
-      }
-    }
-    const projectIdByName = /* @__PURE__ */ new Map();
-    for (const project of snapshot.projects) {
-      projectIdByName.set(project.name.trim(), project.id);
-    }
-    const listTitleById = new Map(csv.lists.map((l) => [l.id, l.title]));
-    const normTitle = (t2) => String(t2 ?? "").trim();
-    const imageTasksByProject = /* @__PURE__ */ new Map();
+    const titles = new Map(csv.lists.map((l) => [l.id, l.title]));
+    const pending = [];
+    const windows = /* @__PURE__ */ new Map();
+    const projectTasks = /* @__PURE__ */ new Map();
     for (const task of csv.tasks) {
-      if (!task.sourceTaskId) continue;
-      if (task.attachmentRefs.length === 0) continue;
-      const listTitle = task.listId ? listTitleById.get(task.listId) : null;
-      const projectId = snapshot.projectIdByTaskId.get(task.sourceTaskId) ?? (listTitle ? projectIdByName.get(listTitle.trim()) : void 0);
-      if (!projectId) {
+      if (canceled()) return result;
+      const listName = task.listId ? titles.get(task.listId) : void 0;
+      const inbox = !listName || /^(Inbox|收集箱)$/i.test(listName.trim());
+      const projects = snapshot.projectIdByTaskId.has(task.sourceTaskId ?? "") ? [snapshot.projectIdByTaskId.get(task.sourceTaskId ?? "")] : inbox && snapshot.inboxId ? [snapshot.inboxId] : snapshot.projects.filter((p) => p.name.trim() === listName?.trim()).map((p) => p.id);
+      if (!projects.length) {
         gaps.push({
           code: "task_attachment_unreachable",
-          message: `\u65E0\u6CD5\u628A\u4EFB\u52A1\u300C${task.title}\u300D\u7684\u6E05\u5355\u300C${listTitle ?? "?"}\u300D\u5BF9\u5E94\u5230\u8D26\u53F7\u91CC\u7684\u9879\u76EE\uFF0C\u672A\u53D6\u56FE\u3002`,
-          taskId: task.id
+          taskId: task.id,
+          message: `\u65E0\u6CD5\u5BF9\u5E94\u4EFB\u52A1\u300C${task.title}\u300D\u7684\u6E05\u5355\uFF0C\u9644\u4EF6\u672A\u6838\u5B9E\u3002`
         });
         continue;
       }
-      const list = imageTasksByProject.get(projectId);
-      if (list) list.push(task);
-      else imageTasksByProject.set(projectId, [task]);
-    }
-    const pending = [];
-    for (const [projectId, tasks] of imageTasksByProject) {
-      const recordByTitle = /* @__PURE__ */ new Map();
-      const addRecord = (rec) => {
-        const key = normTitle(rec.title);
-        if (key && !recordByTitle.has(key)) recordByTitle.set(key, rec);
-      };
-      for (const rec of snapshot.openTasksByProject.get(projectId) ?? []) {
-        addRecord(rec);
-      }
-      const fetchedWindows = /* @__PURE__ */ new Set();
-      for (const task of tasks) {
-        const sourceTaskId = task.sourceTaskId;
-        if (!sourceTaskId) continue;
-        const titleKey = normTitle(task.title);
-        if (!recordByTitle.has(titleKey)) {
-          const center = task.completedTime ?? task.dueDate ?? task.startDate ?? null;
-          if (center) {
-            const day = center.slice(0, 10);
-            const projKey = `p:${day}`;
-            if (!fetchedWindows.has(projKey)) {
-              fetchedWindows.add(projKey);
-              const win = await engine.fetchCompletedTasksInWindow(
+      const records = /* @__PURE__ */ new Map();
+      for (const projectId of projects) {
+        for (const r of snapshot.openTasksByProject.get(projectId) ?? [])
+          if (typeof r.id === "string" && task.status === "todo" && Number(r.status ?? 0) === 0)
+            records.set(r.id, r);
+        if (task.status !== "todo") {
+          if (!task.completedTime) {
+            gaps.push({
+              code: "completed_scan_incomplete",
+              taskId: task.id,
+              message: `\u4EFB\u52A1\u300C${task.title}\u300D\u7F3A\u5C11\u5B8C\u6210\u65F6\u95F4\uFF0C\u65E0\u6CD5\u8BC1\u660E\u5386\u53F2\u9644\u4EF6\u8986\u76D6\u3002`
+            });
+            continue;
+          }
+          const bucketWidth = 14 * 24 * 36e5;
+          const bucket = Math.floor(Date.parse(task.completedTime) / bucketWidth);
+          const center = new Date(
+            bucket * bucketWidth + bucketWidth / 2
+          ).toISOString();
+          const key = `${task.status === "canceled" ? "all" : projectId}:${task.status}:${bucket}`;
+          if (!windows.has(key))
+            windows.set(
+              key,
+              engine.fetchCompletedTasksInWindow(
                 snapshot,
                 projectId,
-                center
-              );
-              for (const rec2 of win) addRecord(rec2);
+                center,
+                task.status === "canceled" ? { status: "Abandoned", global: true } : {}
+              )
+            );
+          try {
+            for (const r of await windows.get(key)) {
+              if (r.projectId === projectId && typeof r.id === "string")
+                records.set(r.id, r);
             }
-            if (!recordByTitle.has(titleKey)) {
-              const globalKey = `g:${day}`;
-              if (!fetchedWindows.has(globalKey)) {
-                fetchedWindows.add(globalKey);
-                const gwin = await engine.fetchCompletedTasksInWindow(
-                  snapshot,
-                  projectId,
-                  center,
-                  { global: true }
-                );
-                for (const rec2 of gwin) addRecord(rec2);
-              }
-            }
+          } catch {
+            gaps.push({
+              code: "completed_scan_incomplete",
+              taskId: task.id,
+              message: `\u4EFB\u52A1\u300C${task.title}\u300D\u7684\u5386\u53F2\u7A97\u53E3\u626B\u63CF\u5931\u8D25\u6216\u672A\u53D6\u5168\uFF0C\u8BF7\u91CD\u8BD5\u3002`
+            });
           }
         }
-        const rec = recordByTitle.get(titleKey);
-        const metas = rec ? engine.attachmentsFromTaskRecord(snapshot, rec) : [];
-        if (metas.length === 0) {
-          gaps.push({
-            code: "task_attachment_unreachable",
-            message: rec ? `\u4EFB\u52A1\u300C${task.title}\u300D\u5728\u8D26\u53F7\u91CC\u6CA1\u6709\u53EF\u4E0B\u8F7D\u7684\u9644\u4EF6\uFF08\u53EF\u80FD\u56FE\u7247\u5DF2\u5220\u9664\uFF09\u3002` : `\u5728\u9879\u76EE\u91CC\u6309\u6807\u9898\u6CA1\u627E\u5230\u4EFB\u52A1\u300C${task.title}\u300D\uFF0C\u672A\u53D6\u56FE\u3002`,
-            taskId: task.id
-          });
-          continue;
-        }
-        for (const meta of metas) {
-          pending.push({ taskId: task.id, sourceTaskId, meta });
-        }
       }
-    }
-    const total = pending.length;
-    if (total > 0) {
-      log(`\u5B9A\u4F4D\u5230 ${total} \u4E2A\u9644\u4EF6\uFF0C\u5F00\u59CB\u4E0B\u8F7D\u2026`);
-    } else {
-      log("\u6CA1\u6709\u53EF\u4E0B\u8F7D\u7684\u9644\u4EF6\u3002");
+      let candidates = choose(task, [...records.values()], engine, snapshot);
+      if (task.status === "todo" && candidates.length === 0 && engine.fetchProjectTasks) {
+        for (const projectId of projects) {
+          if (!projectTasks.has(projectId))
+            projectTasks.set(
+              projectId,
+              engine.fetchProjectTasks(snapshot, projectId)
+            );
+          try {
+            for (const r of await projectTasks.get(projectId)) {
+              if (r.projectId === projectId && typeof r.id === "string" && Number(r.status ?? 0) === 0)
+                records.set(r.id, r);
+            }
+          } catch {
+            gaps.push({
+              code: "task_attachment_unreachable",
+              taskId: task.id,
+              message: `\u4EFB\u52A1\u300C${task.title}\u300D\u6240\u5728\u6E05\u5355\u626B\u63CF\u5931\u8D25\uFF0C\u9644\u4EF6\u672A\u6838\u5B9E\u3002`
+            });
+          }
+        }
+        candidates = choose(task, [...records.values()], engine, snapshot);
+      }
+      if (candidates.length !== 1) {
+        gaps.push({
+          code: candidates.length ? "task_match_ambiguous" : "task_attachment_unreachable",
+          taskId: task.id,
+          message: candidates.length ? `\u4EFB\u52A1\u300C${task.title}\u300D\u6709\u591A\u4E2A\u5019\u9009\uFF0C\u672A\u731C\u6D4B\u9644\u4EF6\u5F52\u5C5E\u3002` : `\u672A\u627E\u5230\u4EFB\u52A1\u300C${task.title}\u300D\uFF0C\u9644\u4EF6\u672A\u6838\u5B9E\u3002`
+        });
+        continue;
+      }
+      const record = candidates[0];
+      apiTaskIds.set(task.id, String(record.id));
+      const metas = engine.attachmentsFromTaskRecord(snapshot, record);
+      if (record.attachments != null && (!Array.isArray(record.attachments) || metas.length < record.attachments.length))
+        gaps.push({
+          code: "task_attachment_unreachable",
+          taskId: task.id,
+          message: `\u4EFB\u52A1\u300C${task.title}\u300D\u7684\u9644\u4EF6\u5143\u6570\u636E\u4E0D\u5B8C\u6574\uFF0C\u65E0\u6CD5\u8BC1\u660E\u5168\u90E8\u9644\u4EF6\u8986\u76D6\u3002`
+        });
+      if (!metas.length && task.attachmentRefs.length)
+        gaps.push({
+          code: "task_attachment_unreachable",
+          taskId: task.id,
+          message: `\u4EFB\u52A1\u300C${task.title}\u300D\u6B63\u6587\u5F15\u7528\u9644\u4EF6\uFF0C\u4F46\u63A5\u53E3\u6CA1\u6709\u9644\u4EF6\u4FE1\u606F\u3002`
+        });
+      for (const meta of metas) pending.push({ task, meta });
+      log(`\u626B\u63CF\u4EFB\u52A1:${apiTaskIds.size}/${csv.tasks.length}`);
     }
     let downloaded = 0;
-    for (const { taskId, sourceTaskId, meta } of pending) {
+    for (const { task, meta } of pending) {
+      if (canceled()) return result;
+      const key = task.sourceTaskId ?? task.id;
+      const list = (attachmentsByTask.get(key) ?? []).filter(
+        (a) => a.id !== meta.id
+      );
+      const previous = options.previous?.attachmentsByTask.get(key)?.find((a) => a.id === meta.id && (a.bytes || a.diskHandle));
+      if (previous) {
+        list.push(previous);
+        attachmentsByTask.set(key, list);
+        downloaded++;
+        continue;
+      }
+      const att = {
+        id: meta.id,
+        taskId: key,
+        name: meta.name,
+        type: meta.type,
+        size: meta.size,
+        bytes: null
+      };
       try {
-        const bytes = await engine.downloadAttachmentBytes(snapshot, meta);
-        const list = attachmentsByTask.get(sourceTaskId) ?? [];
-        list.push({
-          id: meta.id,
-          taskId: sourceTaskId,
-          name: meta.name,
-          type: meta.type,
-          ...meta.size != null ? { size: meta.size } : {},
-          bytes
-        });
-        attachmentsByTask.set(sourceTaskId, list);
-        downloaded += 1;
-        log(`\u5DF2\u4E0B\u8F7D\u9644\u4EF6:${downloaded}/${total}`);
-      } catch (error) {
+        if (engine.downloadAttachmentFile) {
+          const file = await engine.downloadAttachmentFile(snapshot, meta);
+          if (file.size === 0) throw Error("empty");
+          att.diskHandle = file.handle;
+          att.size = file.size;
+          att.type = file.type;
+        } else {
+          const bytes = await engine.downloadAttachmentBytes(snapshot, meta);
+          if (!bytes.length) throw Error("empty");
+          att.bytes = bytes;
+          att.size = bytes.length;
+        }
+        if (meta.size != null && att.size !== meta.size)
+          throw Error("size mismatch");
+        downloaded++;
+      } catch {
+        att.bytes = null;
+        delete att.diskHandle;
         gaps.push({
           code: "attachment_download_failed",
-          message: `\u9644\u4EF6\u4E0B\u8F7D\u5931\u8D25\uFF1A${meta.name}\uFF08${error instanceof Error ? error.message : String(error)}\uFF09`,
-          taskId,
-          attachmentId: meta.id
+          taskId: task.id,
+          attachmentId: meta.id,
+          message: `\u9644\u4EF6\u300C${meta.name}\u300D\u4E0B\u8F7D\u5931\u8D25\u6216\u957F\u5EA6\u4E0D\u7B26\uFF0C\u53EF\u91CD\u8BD5\u3002`
         });
-        const list = attachmentsByTask.get(sourceTaskId) ?? [];
-        list.push({
-          id: meta.id,
-          taskId: sourceTaskId,
-          name: meta.name,
-          type: meta.type,
-          ...meta.size != null ? { size: meta.size } : {},
-          bytes: null
-        });
-        attachmentsByTask.set(sourceTaskId, list);
       }
+      list.push(att);
+      attachmentsByTask.set(key, list);
+      log(`\u5DF2\u4E0B\u8F7D\u9644\u4EF6:${downloaded}/${pending.length}`);
     }
-    if (total > 0) {
-      log(`\u4E0B\u8F7D\u5B8C\u6210\uFF1A${downloaded}/${total} \u4E2A\u9644\u4EF6`);
-    }
-    return { attachmentsByTask, gaps };
+    return result;
   }
 
   // src/lib/host.ts
@@ -3033,10 +3099,10 @@
       hl: "zh_CN",
       tz: "Asia/Shanghai"
     },
-    // 海外 / overseas — EXPERIMENTAL, endpoints unverified.
+    // International site: real CSV attachment verified on 2026-10-02.
     ticktick: {
       id: "ticktick",
-      imagesVerified: false,
+      imagesVerified: true,
       webUrl: "https://ticktick.com",
       apiUrl: "https://api.ticktick.com",
       cookieHostSuffix: "ticktick.com",
@@ -3049,7 +3115,7 @@
       return HOSTS[id];
     }
     throw new Error(
-      `Unknown --host "${id}". Expected "dida365" (\u56FD\u5185, verified) or "ticktick" (\u6D77\u5916, experimental).`
+      `Unknown --host "${id}". Expected "dida365" (\u4E2D\u56FD\u7AD9) or "ticktick" (\u56FD\u9645\u7AD9).`
     );
   }
 
@@ -7109,6 +7175,7 @@
   var ManifestTaskSchema = external_exports.object({
     id: external_exports.string(),
     sourceTaskId: external_exports.string().nullable(),
+    apiTaskId: external_exports.string().optional(),
     title: external_exports.string(),
     kind: external_exports.enum(["task", "note"]),
     status: external_exports.enum(["todo", "done", "canceled"]),
@@ -7132,7 +7199,11 @@
       "image_engine_failed",
       "task_attachment_unreachable",
       "attachment_download_failed",
-      "account_mismatch"
+      "account_mismatch",
+      "task_match_ambiguous",
+      "completed_scan_incomplete",
+      "export_canceled",
+      "official_backup_unavailable"
     ]),
     /** Human-readable explanation. */
     message: external_exports.string(),
@@ -7150,6 +7221,9 @@
     source: external_exports.object({
       host: external_exports.enum(["dida365", "ticktick"]),
       csvPath: external_exports.string(),
+      csvFile: external_exports.literal("backup.csv").optional(),
+      method: external_exports.enum(["official-csv", "api"]).optional(),
+      apiFile: external_exports.literal("api-snapshot.json").optional(),
       withImages: external_exports.boolean(),
       imagesVerifiedHost: external_exports.boolean()
     }),
@@ -7180,7 +7254,7 @@
     "image/avif": "avif"
   };
   function sanitizeSegment(input) {
-    const cleaned = input.replace(/[ -]/g, " ").replace(/[/\\:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().replace(/^\.+/, "").replace(/\.+$/, "");
+    const cleaned = input.replace(/[\u0000-\u001f]/g, " ").replace(/[/\\:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().replace(/^\.+/, "").replace(/\.+$/, "");
     return cleaned || "untitled";
   }
   function extFromAttachment(att) {
@@ -7242,22 +7316,21 @@
     lines.push("---");
     return lines.join("\n");
   }
-  function rewriteBody(content, task, attachmentsForTask, attachmentFileById) {
+  function rewriteBody(content, task, attachmentsForTask, attachmentFileById, relativePrefix) {
     if (!content) return "";
-    const downloaded = attachmentsForTask.filter(
-      (a) => attachmentFileById.has(a.id)
-    );
-    let imageIndex = -1;
     return content.replace(
       /!\[([^\]]*)\]\(([^)]+)\)/g,
       (full, alt, ref) => {
-        imageIndex += 1;
-        const att = downloaded[imageIndex];
-        if (!att) return full;
+        const segments = ref.split(/[/?#]/);
+        let matches = attachmentsForTask.filter((a) => segments.includes(a.id));
+        if (!matches.length && !/^https?:/i.test(ref)) {
+          const basename = segments.at(-1);
+          matches = attachmentsForTask.filter((a) => a.name === basename);
+        }
+        if (matches.length !== 1) return full;
+        const att = matches[0];
         const file = attachmentFileById.get(att.id);
-        if (!file) return full;
-        const altText = alt || att.name || "";
-        return `![${altText}](${file})`;
+        return file ? `![${alt || att.name}](${relativePrefix}${file})` : full;
       }
     );
   }
@@ -7267,6 +7340,11 @@
     const gaps = [...input.gaps ?? []];
     const files = [];
     const binaries = [];
+    const diskFiles = [];
+    if (input.rawCsv !== void 0)
+      files.push({ path: "backup.csv", text: input.rawCsv });
+    if (input.rawApiJson !== void 0)
+      files.push({ path: "api-snapshot.json", text: input.rawApiJson });
     const listById = new Map(
       input.csv.lists.map((l) => [l.id, l])
     );
@@ -7280,7 +7358,7 @@
     for (const [taskId, list] of attachmentsByTask) {
       for (const att of list) {
         let filePath = null;
-        if (att.bytes) {
+        if (att.bytes || att.diskHandle) {
           const ext = extFromAttachment(att);
           let candidate = `attachments/${sanitizeSegment(att.id)}.${ext}`;
           let suffix = 2;
@@ -7291,7 +7369,9 @@
           usedAttachmentPaths.add(candidate);
           filePath = candidate;
           attachmentFileById.set(att.id, candidate);
-          binaries.push({ path: candidate, bytes: att.bytes });
+          if (att.bytes) binaries.push({ path: candidate, bytes: att.bytes });
+          else if (att.diskHandle)
+            diskFiles.push({ path: candidate, handle: att.diskHandle });
           attachmentsDownloaded += 1;
         }
         manifestAttachments.push({
@@ -7317,7 +7397,7 @@
         suffix += 1;
       }
       usedMarkdownPaths.add(mdPath);
-      const attachmentsForTask = attachmentsByTask.get(task.sourceTaskId ?? "") ?? [];
+      const attachmentsForTask = attachmentsByTask.get(task.sourceTaskId ?? task.id) ?? [];
       const folderTitle = list?.folderId ? folderById.get(list.folderId)?.title ?? null : null;
       const frontmatter = buildFrontmatter(
         task,
@@ -7328,16 +7408,34 @@
         task.content ?? "",
         task,
         attachmentsForTask,
-        attachmentFileById
+        attachmentFileById,
+        "../".repeat(mdPath.split("/").length - 1)
       );
+      const prefix = "../".repeat(mdPath.split("/").length - 1);
+      const attachmentLinks = attachmentsForTask.map((att) => {
+        const name = att.name.replace(/[\r\n]/g, " ").replace(/[\\[\]]/g, "\\$&");
+        const file = attachmentFileById.get(att.id);
+        return file ? `- [${name}](<${prefix}${file}>)` : `- ${name}\uFF08\u672A\u80FD\u4E0B\u8F7D\uFF09`;
+      });
+      const attachmentSection = attachmentLinks.length ? `
+## \u9644\u4EF6
+
+${attachmentLinks.join("\n")}` : "";
       const heading = `# ${task.title}`;
-      const text = [frontmatter, "", heading, body ? `
-${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
+      const text = [
+        frontmatter,
+        "",
+        heading,
+        body ? `
+${body}` : "",
+        attachmentSection
+      ].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       files.push({ path: mdPath, text });
       const attachmentIds = attachmentsForTask.map((a) => a.id);
       manifestTasks.push({
         id: task.id,
         sourceTaskId: task.sourceTaskId,
+        ...input.apiTaskIds?.has(task.id) ? { apiTaskId: input.apiTaskIds.get(task.id) } : {},
         title: task.title,
         kind: task.kind,
         status: task.status,
@@ -7358,6 +7456,8 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       source: {
         host: input.host.id,
         csvPath: input.csvPath,
+        ...input.rawCsv !== void 0 ? { csvFile: "backup.csv" } : {},
+        ...input.rawApiJson !== void 0 ? { method: "api", apiFile: "api-snapshot.json" } : {},
         withImages: input.withImages,
         imagesVerifiedHost: input.host.imagesVerified
       },
@@ -7377,7 +7477,7 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       text: `${JSON.stringify(manifest, null, 2)}
 `
     });
-    return { files, binaries, manifest };
+    return { files, binaries, diskFiles, manifest };
   }
 
   // src/lib/image-api.ts
@@ -7387,29 +7487,6 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
   }
   function formatCompletedWindowPart(date) {
     return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}%20${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`;
-  }
-  function buildCompletedWindowPath(projectId, centerIso, options = {}) {
-    const center = new Date(centerIso);
-    if (Number.isNaN(center.getTime())) return null;
-    const windowMs = (options.windowHours ?? COMPLETED_WINDOW_HOURS) * 3600 * 1e3;
-    const from = formatCompletedWindowPart(new Date(center.getTime() - windowMs));
-    const to = formatCompletedWindowPart(new Date(center.getTime() + windowMs));
-    return options.global ? `/api/v2/project/all/completed?from=${from}&to=${to}&limit=100` : `/api/v2/project/${projectId}/completed/?from=${from}&to=${to}&limit=100`;
-  }
-  function pickAttachmentUrl(input) {
-    const candidates = [
-      input.url,
-      input.downloadUrl,
-      input.viewUrl,
-      input.previewUrl,
-      input.fileUrl
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) {
-        return candidate;
-      }
-    }
-    return null;
   }
   function buildAttachmentDownloadUrl(input, host, taskId, projectId) {
     const attachmentId = typeof input.id === "string" ? input.id : typeof input.refId === "string" ? input.refId : null;
@@ -7422,12 +7499,12 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       if (!item || typeof item !== "object") return null;
       const raw = item;
       const name = typeof raw.fileName === "string" ? raw.fileName : typeof raw.name === "string" ? raw.name : "attachment";
-      const url = pickAttachmentUrl(raw) ?? buildAttachmentDownloadUrl(raw, host, taskId, projectId);
+      const url = buildAttachmentDownloadUrl(raw, host, taskId, projectId);
       if (!url) return null;
       const type = typeof raw.contentType === "string" ? raw.contentType : typeof raw.type === "string" ? raw.type : typeof raw.fileType === "string" ? raw.fileType : "application/octet-stream";
       const size = typeof raw.size === "number" ? raw.size : typeof raw.fileSize === "number" ? raw.fileSize : void 0;
       const att = {
-        id: typeof raw.id === "string" ? raw.id : `attachment-${index}`,
+        id: typeof raw.id === "string" ? raw.id : String(raw.refId),
         taskId,
         projectId,
         name,
@@ -7442,7 +7519,74 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
     const taskId = typeof task.id === "string" ? task.id : "";
     const projectId = typeof task.projectId === "string" ? task.projectId : "";
     if (!taskId || !projectId) return [];
-    return normalizeAttachments(task.attachments, snapshot.host, taskId, projectId);
+    return normalizeAttachments(
+      task.attachments,
+      snapshot.host,
+      taskId,
+      projectId
+    );
+  }
+  async function fetchCompletedWindowComplete(projectId, centerIso, options, request) {
+    const center = Date.parse(centerIso);
+    if (!Number.isFinite(center)) throw Error("Invalid completion date");
+    const span = (options.windowHours ?? COMPLETED_WINDOW_HOURS) * 36e5;
+    let calls = 0;
+    async function scan(from, to) {
+      if (++calls > 4096) throw Error("History scan limit exceeded");
+      const target = options.global ? "all" : encodeURIComponent(projectId);
+      const route = options.status ? "/api/v2/project/all/closed" : `/api/v2/project/${target}/completed${options.global ? "" : "/"}`;
+      const path = `${route}?from=${formatCompletedWindowPart(new Date(from))}&to=${formatCompletedWindowPart(new Date(to))}&limit=100${options.status ? "&status=Abandoned" : ""}`;
+      const response = await request(path);
+      const rows = Array.isArray(response) ? response : response && typeof response === "object" && Array.isArray(response.tasks) ? response.tasks : null;
+      if (!rows || rows.some(
+        (r) => !r || typeof r !== "object" || typeof r.id !== "string"
+      ))
+        throw Error("Invalid history response");
+      if (rows.length < 100) return rows;
+      if (to - from <= 1e3)
+        throw Error("History window saturated; coverage unproven");
+      const middle = Math.floor((from + to) / 2e3) * 1e3;
+      const left = await scan(from, middle);
+      const right = await scan(middle, to);
+      return [...new Map([...left, ...right].map((r) => [r.id, r])).values()];
+    }
+    return scan(center - span, center + span);
+  }
+  function snapshotFromBatch(batch, base) {
+    if (!batch || typeof batch !== "object")
+      throw Error("Invalid batch response");
+    const record = batch;
+    if (!Array.isArray(record.projectProfiles) || !record.syncTaskBean || typeof record.syncTaskBean !== "object")
+      throw Error("Incomplete batch response");
+    const bean = record.syncTaskBean;
+    if (!Array.isArray(bean.update)) throw Error("Missing task sync data");
+    const projects = record.projectProfiles.flatMap(
+      (p) => typeof p.id === "string" && typeof p.name === "string" ? [{ id: p.id, name: p.name }] : []
+    );
+    const projectIdByTaskId = /* @__PURE__ */ new Map();
+    const openTasksByProject = /* @__PURE__ */ new Map();
+    for (const task of bean.update) {
+      if (typeof task.id === "string" && typeof task.projectId === "string") {
+        projectIdByTaskId.set(task.id, task.projectId);
+        const list = openTasksByProject.get(task.projectId) ?? [];
+        list.push(task);
+        openTasksByProject.set(task.projectId, list);
+      }
+    }
+    return {
+      ...base,
+      projects,
+      projectIdByTaskId,
+      openTasksByProject,
+      ...typeof record.inboxId === "string" ? { inboxId: record.inboxId } : {}
+    };
+  }
+  function parseProjectTasksResponse(response) {
+    if (!Array.isArray(response) || response.some(
+      (r) => !r || typeof r !== "object" || typeof r.id !== "string"
+    ))
+      throw Error("Invalid project tasks response");
+    return response;
   }
 
   // extension/src/engine.ts
@@ -7514,41 +7658,15 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       );
     }
     const batch = await fetchJson("/api/v2/batch/check/0", cookies, host);
-    const batchRecord = batch && typeof batch === "object" ? batch : {};
-    const projectProfiles = Array.isArray(batchRecord.projectProfiles) ? batchRecord.projectProfiles : [];
-    const projects = projectProfiles.map(
-      (project) => typeof project.id === "string" && typeof project.name === "string" ? { id: project.id, name: project.name } : null
-    ).filter((item) => item !== null);
-    const syncTaskBean = batchRecord.syncTaskBean && typeof batchRecord.syncTaskBean === "object" ? batchRecord.syncTaskBean : {};
-    const openTasks = Array.isArray(syncTaskBean.update) ? syncTaskBean.update : [];
-    const projectIdByTaskId = /* @__PURE__ */ new Map();
-    const openTasksByProject = /* @__PURE__ */ new Map();
-    for (const task of openTasks) {
-      if (typeof task.id === "string" && typeof task.projectId === "string") {
-        projectIdByTaskId.set(task.id, task.projectId);
-        const list = openTasksByProject.get(task.projectId);
-        if (list) list.push(task);
-        else openTasksByProject.set(task.projectId, [task]);
-      }
-    }
-    return {
-      cookies,
-      host,
-      fetchImpl: fetch,
-      projects,
-      projectIdByTaskId,
-      openTasksByProject
-    };
+    return snapshotFromBatch(batch, { cookies, host, fetchImpl: fetch });
   }
   async function fetchCompletedTasksInWindow(snapshot, projectId, centerIso, options = {}) {
-    const path = buildCompletedWindowPath(projectId, centerIso, options);
-    if (!path) return [];
-    try {
-      const res = await fetchJson(path, snapshot.cookies, snapshot.host);
-      return Array.isArray(res) ? res : res && typeof res === "object" && Array.isArray(res.tasks) ? res.tasks : [];
-    } catch {
-      return [];
-    }
+    return fetchCompletedWindowComplete(
+      projectId,
+      centerIso,
+      options,
+      (path) => fetchJson(path, snapshot.cookies, snapshot.host)
+    );
   }
   async function downloadAttachmentBytes(snapshot, attachment) {
     const headers = buildHeaders(snapshot.cookies, snapshot.host);
@@ -7567,6 +7685,13 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
   function createBrowserEngine(host) {
     return {
       loadSnapshot: () => loadSnapshot(host),
+      fetchProjectTasks: async (snapshot, projectId) => parseProjectTasksResponse(
+        await fetchJson(
+          `/api/v2/project/${encodeURIComponent(projectId)}/tasks`,
+          snapshot.cookies,
+          snapshot.host
+        )
+      ),
       fetchCompletedTasksInWindow,
       attachmentsFromTaskRecord,
       downloadAttachmentBytes
@@ -7597,11 +7722,11 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
   }
 
   // extension/src/main.ts
-  var TOOL_VERSION = "0.1.0";
+  var TOOL_VERSION = "1.0.0";
   var I18N = {
     zh: {
-      title: "\u6EF4\u7B54\u6E05\u5355\u5BFC\u51FA Markdown",
-      subtitle: "\u4EFB\u52A1\u6570\u636E \u2192 Markdown\uFF0C\u53EF\u7528\u4E8E Obsidian \u7B49\u7B14\u8BB0\u8F6F\u4EF6",
+      title: "\u6EF4\u7B54\u6E05\u5355\u5907\u4EFD\u52A9\u624B",
+      subtitle: "\u5B98\u65B9 CSV \u4E0D\u542B\u56FE\u7247\u548C\u9644\u4EF6\uFF1B\u8FD9\u91CC\u53EF\u5BFC\u51FA Markdown \u4E0E\u9644\u4EF6",
       hostCn: "\u4E2D\u56FD\u7AD9",
       hostEn: "\u5168\u7403\u7AD9",
       step1Title: "\u2460 \u4ECE\u6EF4\u7B54\u6E05\u5355\u5BFC\u51FA\u6570\u636E",
@@ -7610,21 +7735,21 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       step1Backup: "\u5BFC\u5165\u4E0E\u5907\u4EFD \u2192 \u6570\u636E\u5907\u4EFD \u2192 \u751F\u6210\u5907\u4EFD",
       step1Download: "\u4E0B\u8F7D\u5F97\u5230 CSV \u6587\u4EF6",
       step2Title: "\u2461 \u5BFC\u51FA\u6210 Markdown",
-      csvHint: "\u9009\u62E9\u4E0A\u4E00\u6B65\u5F97\u5230\u7684 CSV \u6587\u4EF6\uFF0C\u5373\u53EF\u751F\u6210\u4E00\u5957\u5E26 YAML frontmatter \u7684 Markdown \u7B14\u8BB0\uFF0C\u53EF\u76F4\u63A5\u7528\u4E8E Obsidian \u7B49\u8F6F\u4EF6\u3002\u5982\u9700\u8FDE\u540C\u9644\u4EF6\u56FE\u7247\u4E00\u5E76\u5BFC\u51FA\uFF0C\u8BF7\u52FE\u9009\u4E0B\u65B9\u9009\u9879\u3002",
+      csvHint: "\u9009\u62E9\u4E0A\u4E00\u6B65\u5F97\u5230\u7684 CSV \u6587\u4EF6\uFF0C\u5373\u53EF\u751F\u6210\u4E00\u5957\u5E26 YAML frontmatter \u7684 Markdown \u7B14\u8BB0\uFF0C\u53EF\u76F4\u63A5\u7528\u4E8E Obsidian \u7B49\u8F6F\u4EF6\u3002\u5982\u9700\u8FDE\u540C\u56FE\u7247\u548C\u6587\u4EF6\u9644\u4EF6\u4E00\u5E76\u5BFC\u51FA\uFF0C\u8BF7\u52FE\u9009\u4E0B\u65B9\u9009\u9879\u3002",
       csvLabel: "\u9009\u62E9 CSV \u6587\u4EF6",
-      withImages: "\u540C\u6B65\u83B7\u53D6\u9644\u4EF6\u56FE\u7247\uFF08\u9700\u672C\u6D4F\u89C8\u5668\u5DF2\u767B\u5F55\u6EF4\u7B54\u6E05\u5355\u7F51\u9875\u7248\uFF09",
+      withImages: "\u540C\u6B65\u83B7\u53D6\u56FE\u7247\u548C\u6587\u4EF6\u9644\u4EF6\uFF08\u9700\u672C\u6D4F\u89C8\u5668\u5DF2\u767B\u5F55\u6EF4\u7B54\u6E05\u5355\u7F51\u9875\u7248\uFF09",
       download: "\u4E0B\u8F7D",
       processing: "\u5904\u7406\u4E2D\u2026",
       selectCsvWarn: "\u8BF7\u5148\u9009\u62E9 CSV \u6587\u4EF6",
       parsed: "CSV \u89E3\u6790\u5B8C\u6210\uFF1A{tasks} \u4E2A\u4EFB\u52A1 / {lists} \u4E2A\u6E05\u5355",
-      fetching: "\u6B63\u5728\u83B7\u53D6\u56FE\u7247\u2026",
+      fetching: "\u6B63\u5728\u83B7\u53D6\u56FE\u7247\u4E0E\u6587\u4EF6\u9644\u4EF6\u2026",
       done: "\u5B8C\u6210\uFF1A{tasks} \u4E2A\u4EFB\u52A1{gapClause}",
       doneGap: "\uFF0C{gaps} \u9879\u6CA1\u62FF\u5230",
       error: "\u51FA\u9519\u4E86\uFF1A{msg}"
     },
     en: {
-      title: "TickTick to Markdown",
-      subtitle: "Task data \u2192 Markdown, works with Obsidian & co.",
+      title: "\u6EF4\u7B54\u6E05\u5355\u5907\u4EFD\u52A9\u624B",
+      subtitle: "Official CSV omits images and attachments; export Markdown with files.",
       hostCn: "China",
       hostEn: "Global",
       step1Title: "\u2460 Export from TickTick",
@@ -7633,14 +7758,14 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       step1Backup: "Import & Backup \u2192 Data Backup \u2192 Generate backup",
       step1Download: "Download the CSV file",
       step2Title: "\u2461 Export to Markdown",
-      csvHint: "Choose the CSV file from the previous step to generate a set of Markdown notes with YAML frontmatter, ready for Obsidian & co. To export attachment images as well, tick the option below.",
+      csvHint: "Choose the CSV file from the previous step to generate a set of Markdown notes with YAML frontmatter, ready for Obsidian & co. To export images and file attachments as well, tick the option below.",
       csvLabel: "Choose CSV file",
-      withImages: "Also fetch attachment images (requires being logged in to TickTick web in this browser)",
+      withImages: "Also fetch images and file attachments (requires being logged in to TickTick web in this browser)",
       download: "Download",
       processing: "Processing\u2026",
       selectCsvWarn: "Please choose a CSV file first",
       parsed: "CSV parsed: {tasks} tasks / {lists} lists",
-      fetching: "Fetching images\u2026",
+      fetching: "Fetching images and files\u2026",
       done: "Done: {tasks} tasks{gapClause}",
       doneGap: ", {gaps} missed",
       error: "Error: {msg}"
@@ -7697,7 +7822,8 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
     const host = resolveHost(hostId);
     setBusy(true);
     try {
-      const csv = parseDidaCsv(await file.text());
+      const rawCsv = await file.text();
+      const csv = parseDidaCsv(rawCsv);
       setStatus(
         t("parsed", {
           tasks: csv.summary.importedTasks,
@@ -7706,6 +7832,7 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       );
       const attachmentsByTask = /* @__PURE__ */ new Map();
       const gaps = [];
+      const apiTaskIds = /* @__PURE__ */ new Map();
       if (withImages) {
         setStatus(t("fetching"));
         const result = await enrichWithImages(csv, createBrowserEngine(host), {
@@ -7715,6 +7842,7 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
           attachmentsByTask.set(id, atts);
         }
         gaps.push(...result.gaps);
+        for (const [id, apiId] of result.apiTaskIds) apiTaskIds.set(id, apiId);
       } else {
         gaps.push({
           code: "images_disabled",
@@ -7725,6 +7853,8 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
         csv,
         host,
         csvPath: file.name,
+        rawCsv,
+        apiTaskIds,
         withImages,
         toolVersion: TOOL_VERSION,
         attachmentsByTask,
@@ -7735,7 +7865,10 @@ ${body}` : ""].join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().concat("\n");
       triggerDownload(blob, `${base}.vault.zip`);
       const gapCount = plan.manifest.gaps.length;
       const gapClause = gapCount > 0 ? t("doneGap", { gaps: gapCount }) : "";
-      setStatus(t("done", { tasks: plan.manifest.counts.tasks, gapClause }), "ok");
+      setStatus(
+        t("done", { tasks: plan.manifest.counts.tasks, gapClause }),
+        "ok"
+      );
     } catch (error) {
       setStatus(
         t("error", {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TickTick → Markdown</title>
+    <title>滴答清单备份助手</title>
     <style>
       :root {
         --bg: #ffffff;
@@ -124,8 +124,8 @@
     </style>
   </head>
   <body>
-    <h1 data-i18n="title">滴答清单导出 Markdown</h1>
-    <div class="subtitle" data-i18n="subtitle">任务数据 → Markdown</div>
+    <h1 data-i18n="title">滴答清单备份助手</h1>
+    <div class="subtitle" data-i18n="subtitle">官方 CSV 不含图片和附件；这里可导出 Markdown 与附件</div>
 
     <div class="segmented" data-active-lang="zh">
       <input type="radio" id="host-dida" name="host" value="dida365" checked />
@@ -152,11 +152,11 @@
       </div>
       <input type="file" id="csv-file" accept=".csv" />
       <p class="hint" data-i18n="csvHint">
-        选择上一步得到的 CSV 文件，即可生成一套带 YAML frontmatter 的 Markdown 笔记，可直接用于 Obsidian 等软件。如需连同附件图片一并导出，请勾选下方选项。
+        选择上一步得到的 CSV 文件，即可生成一套带 YAML frontmatter 的 Markdown 笔记，可直接用于 Obsidian 等软件。如需连同图片和文件附件一并导出，请勾选下方选项。
       </p>
       <label class="check-row">
         <input type="checkbox" id="with-images" />
-        <span data-i18n="withImages">同步获取附件图片（需本浏览器已登录滴答清单网页版）</span>
+        <span data-i18n="withImages">同步获取图片和文件附件（需本浏览器已登录滴答清单网页版）</span>
       </label>
       <button id="download-btn" data-i18n="download">下载</button>
     </section>

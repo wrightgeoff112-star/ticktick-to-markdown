@@ -15,3 +15,8 @@ tmp/
 
 # Internal design notes — not published. Location pointer in docs/README.md
 /docs/
+
+# Desktop build outputs and native temporary state
+/desktop/dist/
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
