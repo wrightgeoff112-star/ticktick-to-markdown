@@ -45,6 +45,7 @@ export const ManifestGapSchema = z.object({
   /** Stable machine code for the gap kind. */
   code: z.enum([
     "images_skipped_not_macos",
+    // Legacy gap code retained to read older manifests; current exporters do not emit it.
     "images_skipped_overseas_unverified",
     "images_disabled",
     "image_engine_failed",

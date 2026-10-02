@@ -10,7 +10,7 @@
  * The API is unofficial and may break at any time. Use at your own risk.
  *
  * 平台无关的解析逻辑（类型 + 附件解析 + 已完成窗口路径）已抽到 `image-api.ts`，
- * 浏览器扩展引擎（extension/src/engine.ts）共用同一份。本文件只保留 Node 专属：
+ * 原生桌面端共用同一份。本文件只保留 Node 专属：
  * Chrome cookie 解密 + 用 Node fetch 落地引擎操作。
  */
 

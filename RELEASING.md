@@ -12,7 +12,7 @@ Mac 可在「苹果菜单 → 关于本机」查看芯片；Windows ARM 版暂�
 
 ## 第一次发布
 
-1. 在桌面端完成一次真实导出，检查解压后的 Markdown 和附件。Mac 原生导出已实测；Windows 和 Intel Mac 仍需运行验收。
+1. 在目标平台完成真实导出，检查解压后的 Markdown、图片及普通文件附件。
 2. 整理并提交本次源码、锁文件与 `.github/workflows/desktop-build.yml`，推送到仓库。不要提交 `tmp/`、导出的账号数据、缓存或登录凭据。
 3. 在仓库 [Actions](https://github.com/wrightgeoff112-star/ticktick-to-markdown/actions) 中运行 **Desktop installers**，选择包含本次改动的分支。首次使用需先把工作流合入默认分支。
 4. 等三类构建成功，下载各自 artifact 并解压，取出两个 DMG 和一个 EXE。Actions 下载的外层 ZIP 是构建产物容器，不是安装包。

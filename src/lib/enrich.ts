@@ -1,4 +1,4 @@
-/** Shared attachment orchestration for CLI, extension and native desktop. */
+/** Shared attachment orchestration for native desktop and development utilities. */
 import type { CsvParseResult, CsvTask } from "./csv.js";
 import type {
   EngineAttachment,

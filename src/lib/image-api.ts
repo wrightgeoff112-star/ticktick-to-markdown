@@ -1,8 +1,8 @@
 /**
  * 平台无关的图片接口逻辑：滴答非官方 v2 API 的类型 + 附件解析 + 已完成窗口路径。
  *
- * Node 引擎（`image-engine.ts`）和浏览器扩展引擎（`extension/src/engine.ts`）
- * 共用这一份，保证两边对接口返回的解析完全一致。这里没有任何 Node 或 DOM 依赖。
+ * 原生桌面端和 Node 开发工具共用这一份，保证接口返回的解析一致。
+ * 这里没有任何 Node 或 DOM 依赖。
  */
 
 import type { HostConfig } from "./host.js";

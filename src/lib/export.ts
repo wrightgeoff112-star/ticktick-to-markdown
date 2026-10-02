@@ -45,7 +45,7 @@ export interface ExportOptions {
 export interface ExportResult {
   plan: VaultPlan;
   csv: CsvParseResult;
-  /** Downloaded attachments grouped by CsvTask.sourceTaskId (for the SDX bundle). */
+  /** Downloaded attachments grouped by CsvTask.sourceTaskId for the ZIP manifest. */
   attachmentsByTask: Map<string, ResolvedAttachment[]>;
 }
 
@@ -78,14 +78,6 @@ export async function runExport(options: ExportOptions): Promise<ExportResult> {
       });
       log("当前不是 macOS，跳过图片引擎（仅产出无图结果）。");
     } else {
-      if (!options.host.imagesVerified) {
-        gaps.push({
-          code: "images_skipped_overseas_unverified",
-          message: `--host ${options.host.id} 的图片直连路径未经验证（实验性，海外接口/cookie 域可能不同），可能无法取到任何图片。`,
-        });
-        log(`警告：--host ${options.host.id} 取图为实验性，未验证。`);
-      }
-
       log(
         "正在从 Chrome 读取登录 cookie 并枚举项目…（可能弹出 Keychain 授权框）",
       );
