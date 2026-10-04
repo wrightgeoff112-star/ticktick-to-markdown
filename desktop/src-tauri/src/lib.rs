@@ -10,6 +10,8 @@ use std::{
 };
 use tauri::{Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+mod login_navigation;
+
 fn api_error_message(status: u16, body: &str) -> String {
     let quota = serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -238,15 +240,12 @@ async fn open_login(
         WebviewUrl::External(format!("https://{domain}/signin").parse().unwrap()),
     )
     .title("在官方页面登录；完成后回到导出助手")
+    // Current official social buttons use same-window navigation; do not grant
+    // unrestricted popup windows native privileges or a separate cookie store.
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
     .on_download(|_, _| false)
     .inner_size(1000., 760.)
-    .on_navigation(move |url| {
-        url.scheme() == "https"
-            && url
-                .host_str()
-                .is_some_and(|h| h == domain_owned || h.ends_with(&format!(".{domain_owned}")))
-    })
+    .on_navigation(move |url| login_navigation::allowed(&domain_owned, url))
     .build()
     .map_err(|_| "无法打开官方登录窗口")?;
     Ok(())
@@ -834,6 +833,18 @@ mod tests {
             &url
         ));
         assert!(!cookie_matches(None, Some("/"), true, false, &url));
+        // Visiting OAuth providers must not forward their cookies to the backup API.
+        for provider in [
+            ".weixin.qq.com",
+            ".qq.com",
+            ".google.com",
+            ".apple.com",
+            ".facebook.com",
+            ".weibo.com",
+            ".sina.com.cn",
+        ] {
+            assert!(!cookie_matches(Some(provider), Some("/"), true, false, &url));
+        }
         assert!(!cookie_matches(
             Some(".dida365.com"),
             Some("/api/v2/task"),
