@@ -29,6 +29,7 @@ jobs:
       - run: bun run test
       - run: bun run typecheck
       - run: bun run typecheck:desktop
+      - run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib -j 2
       - run: bun run ${{ matrix.command }}
         env:
           CARGO_BUILD_JOBS: 2

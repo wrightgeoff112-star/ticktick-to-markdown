@@ -277,7 +277,7 @@ export async function exportDesktop(
       host,
       csvPath: "backup.csv",
       withImages: false,
-      toolVersion: "1.1.0",
+      toolVersion: "1.2.0",
     }),
   );
   const enriched = await downloadScannedAttachments(scan, engine, {
@@ -302,7 +302,7 @@ export async function exportDesktop(
     rawCsv,
     ...(apiBackup ? { rawApiJson: apiBackup.rawJson } : {}),
     withImages: true,
-    toolVersion: "1.1.0",
+    toolVersion: "1.2.0",
     attachmentsByTask: enriched.attachmentsByTask,
     apiTaskIds: enriched.apiTaskIds,
     gaps,

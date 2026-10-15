@@ -249,7 +249,7 @@ test("国际站不因站点选择生成固定的未验证缺口", async () => {
   });
   assert.equal(result.plan.manifest.gaps.length, 0);
   assert.equal(result.plan.manifest.source.imagesVerifiedHost, true);
-  assert.equal(result.plan.manifest.tool.version, "1.1.0");
+  assert.equal(result.plan.manifest.tool.version, "1.2.0");
 });
 
 test("扫描有总时间预算，终止挂起请求且不接受晚到的CSV", async () => {
