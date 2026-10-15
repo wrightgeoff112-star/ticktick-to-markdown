@@ -4,6 +4,7 @@ import {
   scanDesktop,
   saveDesktopPlan,
   type DesktopScan,
+  type DesktopCsvCache,
   type NativeBridge,
   type ExportStage,
 } from "../../src/lib/desktop-export.js";
@@ -30,6 +31,7 @@ let view: View = "setup",
   isBusy = false;
 let controller: AbortController | undefined;
 let scanned: DesktopScan | undefined;
+const csvCache: DesktopCsvCache = {};
 let previous: EnrichResult | undefined;
 let pendingPlan: VaultPlan | undefined;
 let saved: { plan: VaultPlan; path: string; size?: number } | undefined;
@@ -113,7 +115,13 @@ function clearMessage() {
 }
 function message(copy: string, error?: unknown) {
   $("message-bar").hidden = false;
-  $("message-text").textContent = copy;
+  const detail =
+    error instanceof Error
+      ? error.message
+      : error === undefined
+        ? ""
+        : String(error);
+  $("message-text").textContent = detail ? `${copy} 原因：${detail}` : copy;
   $("scan-details").hidden = true;
   $("error-details").hidden = error === undefined;
   if (error !== undefined)
@@ -292,6 +300,9 @@ async function loginAndScan() {
   busy(true);
   clearMessage();
   show("progress", 0);
+  // A fresh backup after a completed scan should reflect current source data.
+  // Failed scans retain CSV for retry; scanDesktop checks the account before reuse.
+  if (scanned) csvCache.backup = undefined;
   scanned = undefined;
   previous = undefined;
   pendingPlan = undefined;
@@ -332,6 +343,7 @@ async function loginAndScan() {
     await bridge("hide_login");
     $("connection").hidden = false;
     scanned = await scanDesktop(hostId, bridge, {
+      csvCache,
       signal,
       onProgress: progress,
     });
@@ -491,7 +503,7 @@ async function retrySaved() {
     show("progress", 2);
     try {
       const refreshed = await scanDesktop(original.hostId, bridge, {
-        rawCsv: original.rawCsv,
+        csvCache,
         previous,
         signal,
         onProgress: progress,
@@ -593,6 +605,7 @@ button("reveal").addEventListener("click", async () => {
   }
 });
 select("host").addEventListener("change", async () => {
+  csvCache.backup = undefined;
   scanned = undefined;
   previous = undefined;
   pendingPlan = undefined;

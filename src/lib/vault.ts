@@ -79,16 +79,72 @@ const IMAGE_EXT_BY_MIME: Record<string, string> = {
   "image/avif": "avif",
 };
 
-/** Filesystem-safe-ish segment; keeps CJK, strips path separators / control chars. */
+const pathKey = (value: string) => value.normalize("NFC").toLowerCase();
+const encoder = new TextEncoder();
+function truncateBytes(value: string, budget: number): string {
+  let result = "",
+    size = 0;
+  for (const char of value) {
+    const bytes = encoder.encode(char).length;
+    if (size + bytes > budget) break;
+    result += char;
+    size += bytes;
+  }
+  return result;
+}
+/** Portable segments; full original titles remain in Markdown and manifest. */
 function sanitizeSegment(input: string): string {
-  const cleaned = input
-    .replace(/[\u0000-\u001f]/g, " ")
+  let cleaned = input
+    .normalize("NFC")
+    .replace(/\p{Cc}/gu, " ")
     .replace(/[/\\:*?"<>|]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^\.+/, "")
-    .replace(/\.+$/, "");
-  return cleaned || "untitled";
+    .replace(/[. ]+$/, "");
+  if (/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(cleaned))
+    cleaned = "_" + cleaned;
+  return (
+    truncateBytes(cleaned || "untitled", 100).replace(/[. ]+$/, "") ||
+    "untitled"
+  );
+}
+function pathAllocator(reserved: string[] = []) {
+  const used = new Set(reserved.map(pathKey));
+  const next = new Map<string, number>();
+  return (directory: string, name: string, extension = "") => {
+    const base = `${directory}${name}`,
+      key = pathKey(base + extension);
+    let suffix = next.get(key) ?? 1;
+    let candidate = base + (suffix === 1 ? "" : `-${suffix}`) + extension;
+    while (used.has(pathKey(candidate))) {
+      suffix++;
+      candidate = `${base}-${suffix}${extension}`;
+    }
+    used.add(pathKey(candidate));
+    next.set(key, suffix + 1);
+    return candidate;
+  };
+}
+
+/** Match native ZIP validation before any expensive downloads or IPC. */
+export function validateVaultPaths(
+  plan: Pick<VaultPlan, "files" | "binaries" | "diskFiles">,
+): void {
+  const used = new Set<string>();
+  for (const file of [...plan.files, ...plan.binaries, ...plan.diskFiles]) {
+    const path = file.path;
+    if (
+      !path ||
+      encoder.encode(path).length >= 1024 ||
+      /[\p{Cc}\\:]/u.test(path) ||
+      path.split("/").some((p) => !p || p === "." || p === "..")
+    )
+      throw Error("备份文件路径无效，无法打包；请保留此错误以便排查。");
+    const key = pathKey(path);
+    if (used.has(key)) throw Error("备份文件路径重复，无法安全打包。");
+    used.add(key);
+  }
 }
 
 function extFromAttachment(att: ResolvedAttachment): string {
@@ -220,20 +276,32 @@ export function buildVault(input: BuildVaultInput): VaultPlan {
   const attachmentFileById = new Map<string, string>();
   const manifestAttachments: ManifestAttachment[] = [];
   let attachmentsDownloaded = 0;
-  const usedAttachmentPaths = new Set<string>();
+  const allocateFile = pathAllocator(
+    files.map((f) => f.path).concat("manifest.json"),
+  );
+  const allocateDirectory = pathAllocator([
+    "attachments",
+    "backup.csv",
+    "api-snapshot.json",
+    "manifest.json",
+  ]);
+  const listDirectories = new Map(
+    input.csv.lists.map((l) => [
+      l.id,
+      allocateDirectory("", sanitizeSegment(l.title)),
+    ]),
+  );
 
   for (const [taskId, list] of attachmentsByTask) {
     for (const att of list) {
       let filePath: string | null = null;
       if (att.bytes || att.diskHandle) {
         const ext = extFromAttachment(att);
-        let candidate = `attachments/${sanitizeSegment(att.id)}.${ext}`;
-        let suffix = 2;
-        while (usedAttachmentPaths.has(candidate)) {
-          candidate = `attachments/${sanitizeSegment(att.id)}-${suffix}.${ext}`;
-          suffix += 1;
-        }
-        usedAttachmentPaths.add(candidate);
+        const candidate = allocateFile(
+          "attachments/",
+          sanitizeSegment(att.id),
+          `.${ext}`,
+        );
         filePath = candidate;
         attachmentFileById.set(att.id, candidate);
         if (att.bytes) binaries.push({ path: candidate, bytes: att.bytes });
@@ -253,22 +321,19 @@ export function buildVault(input: BuildVaultInput): VaultPlan {
     }
   }
 
+  const inboxDirectory = allocateDirectory("", "Inbox");
+
   // Build per-task markdown files.
   const manifestTasks: ManifestTask[] = [];
-  const usedMarkdownPaths = new Set<string>();
 
   for (const task of input.csv.tasks) {
     const list = task.listId ? listById.get(task.listId) : undefined;
-    const projectDir = list ? sanitizeSegment(list.title) : "Inbox";
-    const baseName = sanitizeSegment(task.title);
-
-    let mdPath = `${projectDir}/${baseName}.md`;
-    let suffix = 2;
-    while (usedMarkdownPaths.has(mdPath)) {
-      mdPath = `${projectDir}/${baseName}-${suffix}.md`;
-      suffix += 1;
-    }
-    usedMarkdownPaths.add(mdPath);
+    const projectDir = list ? listDirectories.get(list.id)! : inboxDirectory;
+    const mdPath = allocateFile(
+      `${projectDir}/`,
+      sanitizeSegment(task.title),
+      ".md",
+    );
 
     const attachmentsForTask =
       attachmentsByTask.get(task.sourceTaskId ?? task.id) ?? [];

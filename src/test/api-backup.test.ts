@@ -55,7 +55,7 @@ const request = async (path: string): Promise<unknown> => {
   if (path.includes("/batch/")) return batch;
   if (path.endsWith("/tasks"))
     return [batch.syncTaskBean.update[1], batch.syncTaskBean.update[2]];
-  if (path.includes("/completed?")) return [done];
+  if (path.includes("status=Completed")) return [done];
   if (path.includes("/closed?")) return [abandoned];
   throw Error("unexpected " + path);
 };
@@ -82,7 +82,7 @@ test("API备用备份包含收集箱、笔记、清单步骤、父子关系和�
 });
 test("备用历史接口失败必须留下覆盖缺口，不能把空结果当完整", async () => {
   const result = await readApiBackup(async (p) => {
-    if (p.includes("/completed?")) throw Error("timeout");
+    if (p.includes("status=Completed")) throw Error("timeout");
     return request(p);
   });
   assert.equal(result.csv.tasks.length, 4);

@@ -1,4 +1,5 @@
 /** Native transport only; parsing, identity matching and vault layout stay shared. */
+import { scanHistory } from "./history-scan.js";
 import { readApiBackup, type ApiBackup } from "./api-backup.js";
 import { parseDidaCsv, type CsvParseResult } from "./csv.js";
 import {
@@ -15,19 +16,25 @@ import {
   fetchCompletedWindowComplete,
   parseProjectTasksResponse,
 } from "./image-api.js";
-import { buildVault, type VaultPlan } from "./vault.js";
+import { buildVault, validateVaultPaths, type VaultPlan } from "./vault.js";
 export type NativeBridge = <T = unknown>(
   command: string,
   args?: Record<string, unknown>,
 ) => Promise<T>;
 export type ExportStage = "preparing" | "scanning" | "downloading" | "packing";
+export interface DesktopCsvCache {
+  backup?: { hostId: HostId; accountId: string; rawCsv: string };
+}
 export interface DesktopExportOptions {
   destination?: string;
   scanned?: DesktopScan;
   selectedAttachmentKeys?: ReadonlySet<string>;
   signal?: AbortSignal;
+  /** Whole scan budget, including official CSV generation. Defaults to two minutes. */
+  scanTimeoutMs?: number;
   previous?: EnrichResult;
   rawCsv?: string;
+  csvCache?: DesktopCsvCache;
   onProgress?: (stage: ExportStage, message: string) => void;
   onEnriched?: (result: EnrichResult, rawCsv: string | undefined) => void;
   onPlan?: (plan: VaultPlan) => void;
@@ -45,10 +52,61 @@ export async function scanDesktop(
   invoke: NativeBridge,
   options: DesktopExportOptions = {},
 ): Promise<DesktopScan> {
+  if (options.signal?.aborted) throw Error("导出已取消");
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const cancel = () => controller.abort(Error("导出已取消"));
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        Error(
+          "扫描超时：两分钟内未能完成附件统计，请稍后重试；本次未下载附件。",
+        ),
+      ),
+    options.scanTimeoutMs ?? 120_000,
+  );
+  const cancelNative = () => {
+    void invoke("cancel_export").catch(() => {});
+  };
+  signal.addEventListener("abort", cancelNative, { once: true });
+  // Only scanning is bounded. Returned download transport has its own cancellation lifetime.
+  const bounded: NativeBridge = (command, args) => {
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      invoke(command, args)
+        .then((value) => {
+          if (signal.aborted) reject(signal.reason);
+          else resolve(value as never);
+        }, reject)
+        .finally(() => signal.removeEventListener("abort", abort));
+    });
+  };
+  try {
+    return await scanDesktopWithinBudget(hostId, bounded, invoke, {
+      ...options,
+      signal,
+    });
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", cancel);
+    signal.removeEventListener("abort", cancelNative);
+  }
+}
+
+async function scanDesktopWithinBudget(
+  hostId: HostId,
+  invoke: NativeBridge,
+  downloadInvoke: NativeBridge,
+  options: DesktopExportOptions,
+): Promise<DesktopScan> {
   const host = resolveHost(hostId);
   const progress = options.onProgress ?? (() => {});
   const active = () => {
-    if (options.signal?.aborted) throw Error("导出已取消");
+    if (options.signal?.aborted)
+      throw options.signal.reason ?? Error("导出已取消");
   };
   const request = async (path: string) => {
     active();
@@ -68,12 +126,31 @@ export async function scanDesktop(
   active();
   progress("preparing", "正在生成官方备份…");
   let rawCsv = options.rawCsv;
+  let cachedBatch: unknown;
+  let accountId: string | undefined;
+  if (options.csvCache) {
+    // Validate the current account on every retry, including after reopening login.
+    cachedBatch = await request("/api/v2/batch/check/0");
+    accountId =
+      snapshotFromBatch(cachedBatch, { host, cookies: {}, fetchImpl: fetch })
+        .inboxId ?? undefined;
+    const cached = options.csvCache.backup;
+    if (
+      accountId &&
+      cached?.hostId === hostId &&
+      cached.accountId === accountId
+    )
+      rawCsv = cached.rawCsv;
+    else options.csvCache.backup = undefined;
+  }
   let apiBackup: ApiBackup | undefined;
   if (rawCsv === undefined) {
     const useApi = async () => {
       progress("preparing", "官方 CSV 暂不可用，正在读取任务与附件备份…");
-      apiBackup = await readApiBackup(request, (message) =>
-        progress("preparing", message),
+      apiBackup = await readApiBackup(
+        request,
+        (message) => progress("preparing", message),
+        options.signal,
       );
     };
     if (
@@ -101,16 +178,27 @@ export async function scanDesktop(
   }
   const csv = apiBackup?.csv ?? parseDidaCsv(rawCsv!);
   active();
+  if (options.csvCache && accountId && rawCsv !== undefined)
+    options.csvCache.backup = { hostId, accountId, rawCsv };
   const engine: EngineApi = {
     loadSnapshot: async () =>
       snapshotFromBatch(
-        apiBackup?.batch ?? (await request("/api/v2/batch/check/0")),
+        apiBackup?.batch ??
+          cachedBatch ??
+          (await request("/api/v2/batch/check/0")),
         {
           host,
           cookies: {},
           fetchImpl: fetch,
         },
       ),
+    loadHistory: async (_snapshot, tasks) =>
+      apiBackup
+        ? { records: apiBackup.records, gaps: [] }
+        : scanHistory(tasks, request, {
+            signal: options.signal,
+            onProgress: (message) => progress("scanning", message),
+          }),
     fetchCompletedTasksInWindow: (_snapshot, projectId, center, opts = {}) =>
       apiBackup
         ? Promise.resolve(
@@ -137,7 +225,7 @@ export async function scanDesktop(
       throw Error("Native disk transport required");
     },
     downloadAttachmentFile: async (_snapshot, a) => {
-      const file = await invoke<{
+      const file = await downloadInvoke<{
         diskHandle: string;
         size: number;
         type: string;
@@ -182,6 +270,16 @@ export async function exportDesktop(
   const { csv, rawCsv, apiBackup, engine, scan } = scanned;
   const host = resolveHost(hostId);
   const progress = options.onProgress ?? (() => {});
+  // Fail fast on text/path problems before downloading selected attachment bytes.
+  validateVaultPaths(
+    buildVault({
+      csv,
+      host,
+      csvPath: "backup.csv",
+      withImages: false,
+      toolVersion: "1.1.0",
+    }),
+  );
   const enriched = await downloadScannedAttachments(scan, engine, {
     signal: options.signal,
     previous: options.previous,
@@ -226,6 +324,7 @@ export function saveDesktopPlan(
   invoke: NativeBridge,
   destination?: string,
 ): Promise<string | null> {
+  validateVaultPaths(plan);
   return invoke<string | null>("save_zip", {
     files: plan.files.map((f) => ({ path: f.path, content: f.text })),
     attachments: plan.diskFiles.map((f) => ({

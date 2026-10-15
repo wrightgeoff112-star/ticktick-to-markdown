@@ -251,3 +251,134 @@ test("国际站不因站点选择生成固定的未验证缺口", async () => {
   assert.equal(result.plan.manifest.source.imagesVerifiedHost, true);
   assert.equal(result.plan.manifest.tool.version, "1.1.0");
 });
+
+test("扫描有总时间预算，终止挂起请求且不接受晚到的CSV", async () => {
+  const calls: string[] = [];
+  let finish!: (value: any) => void;
+  const bridge: NativeBridge = async (command) => {
+    calls.push(command);
+    if (command === "api_json")
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    return undefined as any;
+  };
+  await assert.rejects(
+    desktop.scanDesktop("dida365", bridge, { scanTimeoutMs: 20 } as any),
+    /扫描超时/,
+  );
+  assert.ok(calls.includes("cancel_export"));
+  finish(JSON.stringify({}));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls.filter((c) => c === "api_json").length, 1);
+});
+
+test("CSV历史使用跨清单批量元数据，不下载附件", async () => {
+  const paths: string[] = [];
+  const bridge: NativeBridge = async (command, args) => {
+    assert.notEqual(command, "download_attachment");
+    if (command !== "api_json") return undefined as any;
+    const path = String(args?.path);
+    paths.push(path);
+    if (path.includes("batch"))
+      return JSON.stringify({
+        inboxId: "i",
+        projectProfiles: [],
+        syncTaskBean: { update: [] },
+      }) as any;
+    assert.match(path, /all\/closed\?/);
+    assert.match(path, /status=Completed/);
+    return JSON.stringify([
+      {
+        id: "done",
+        title: "完成",
+        projectId: "i",
+        status: 2,
+        completedTime: "2026-01-01T00:00:00Z",
+        attachments: [{ id: "a", name: "a.pdf", size: 123 }],
+      },
+    ]) as any;
+  };
+  const result = await desktop.scanDesktop("dida365", bridge, {
+    rawCsv:
+      "taskId,Title,List Name,Status,Completed Time\n1,完成,收集箱,2,2026-01-01T00:00:00Z",
+  });
+  assert.equal(result.scan.entries.length, 1);
+  assert.equal(result.scan.gaps.length, 0);
+  assert.equal(paths.length, 2);
+});
+
+test("历史超时后复用已取得CSV，但切换账号绝不复用", async () => {
+  const csvCache = {};
+  let account = "a",
+    hang = true,
+    exports = 0;
+  const bridge: NativeBridge = async (command, args) => {
+    if (command !== "api_json") return undefined as any;
+    const path = String(args?.path);
+    if (path.includes("/batch/"))
+      return JSON.stringify({
+        inboxId: account,
+        projectProfiles: [],
+        syncTaskBean: { update: [] },
+      }) as any;
+    if (path.endsWith("/auto")) {
+      exports++;
+      return "{}" as any;
+    }
+    if (path.endsWith("/export"))
+      return JSON.stringify(
+        "taskId,Title,List Name,Status,Completed Time\n1,任务,收集箱,2,2026-01-01T00:00:00Z",
+      ) as any;
+    if (hang) return new Promise(() => {});
+    return JSON.stringify([
+      {
+        id: "real",
+        projectId: account,
+        title: "任务",
+        status: 2,
+        completedTime: "2026-01-01T00:00:00Z",
+      },
+    ]) as any;
+  };
+  await assert.rejects(
+    desktop.scanDesktop("dida365", bridge, {
+      csvCache,
+      scanTimeoutMs: 20,
+    } as any),
+    /超时/,
+  );
+  hang = false;
+  const result = await desktop.scanDesktop("dida365", bridge, {
+    csvCache,
+  } as any);
+  assert.equal(result.scan.gaps.length, 0);
+  assert.equal(exports, 1);
+  account = "b";
+  await desktop.scanDesktop("dida365", bridge, { csvCache } as any);
+  assert.equal(exports, 2);
+});
+
+test("保存计划出现无效或重复路径时不进入原生写入", async () => {
+  const { buildVault } = await import("../lib/vault.js");
+  const { parseDidaCsv } = await import("../lib/csv.js");
+  const { resolveHost } = await import("../lib/host.js");
+  const plan = buildVault({
+    csv: parseDidaCsv("taskId,Title\n1,任务"),
+    host: resolveHost("dida365"),
+    csvPath: "backup.csv",
+    withImages: false,
+    toolVersion: "test",
+  });
+  let writes = 0;
+  const bridge: NativeBridge = async () => {
+    writes++;
+    return undefined as any;
+  };
+  plan.files.push({ path: "../escape.md", text: "text" });
+  assert.throws(() => desktop.saveDesktopPlan(plan, bridge), /路径无效/);
+  plan.files.pop();
+  plan.files.push({ ...plan.files[0]! });
+  assert.throws(() => desktop.saveDesktopPlan(plan, bridge), /路径重复/);
+  assert.equal(writes, 0);
+});

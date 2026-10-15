@@ -297,3 +297,116 @@ test("下载中取消保留成功项，选择不变时继续只下载剩余项",
   assert.deepEqual(calls, ["a", "b"]);
   assert.equal(retry.gaps.length, 0);
 });
+
+test("large active lists build identity indexes once instead of re-reading every record per task", async () => {
+  const parsed = parseDidaCsv(
+    "taskId,Title,List Name\n" +
+      Array.from({ length: 3000 }, (_, i) => `r${i},任务${i},收集箱`).join(
+        "\n",
+      ),
+  );
+  let reads = 0;
+  const records = parsed.tasks.map((t, i) => ({
+    get id() {
+      reads++;
+      return `r${i}`;
+    },
+    title: t.title,
+    projectId: "inbox",
+    status: 0,
+    attachments: [],
+  }));
+  const result = await scanAttachments(parsed, engine(records));
+  assert.equal(result.apiTaskIds.size, 3000);
+  assert.ok(reads < 50000, `record id reads: ${reads}`);
+});
+test("bulk history is reused across projects including abandoned tasks", async () => {
+  const parsed = parseDidaCsv(
+    "taskId,Title,List Name,Status,Completed Time\n1,a,P1,-1,2025-01-01T01:00:00Z\n2,b,P2,-1,2025-01-01T02:00:00Z",
+  );
+  const e = engine([]);
+  const load = e.loadSnapshot;
+  e.loadSnapshot = async () => ({
+    ...(await load()),
+    projects: [
+      { id: "p1", name: "P1" },
+      { id: "p2", name: "P2" },
+    ],
+  });
+  let bulkCalls = 0,
+    legacyCalls = 0;
+  (e as any).loadHistory = async () => {
+    bulkCalls++;
+    return {
+      records: [
+        {
+          id: "a",
+          title: "a",
+          projectId: "p1",
+          status: -1,
+          attachments: [{ id: "aa", name: "a.pdf" }],
+        },
+        {
+          id: "b",
+          title: "b",
+          projectId: "p2",
+          status: -1,
+          attachments: [{ id: "bb", name: "b.pdf" }],
+        },
+      ],
+      gaps: [],
+    };
+  };
+  e.fetchCompletedTasksInWindow = async () => {
+    legacyCalls++;
+    throw Error("legacy history should not run");
+  };
+  const result = await scanAttachments(parsed, e);
+  assert.equal(result.apiTaskIds.size, 2);
+  assert.equal(result.entries.length, 2);
+  assert.equal(bulkCalls, 1);
+  assert.equal(legacyCalls, 0);
+  assert.equal(result.gaps.length, 0);
+});
+
+test("同名同创建时间的3000条历史按完成时间索引，不逐条遍历候选", async () => {
+  const { parseDidaCsv } = await import("../lib/csv.js");
+  const csv = parseDidaCsv(
+    "taskId,Title,List Name,Status,Created Time,Completed Time\n" +
+      Array.from(
+        { length: 3000 },
+        (_, i) =>
+          `${i},重复,收集箱,2,2020-01-01T00:00:00Z,${new Date(Date.UTC(2025, 0, 1) + i * 1000).toISOString()}`,
+      ).join("\n"),
+  );
+  let reads = 0;
+  const records = csv.tasks.map((t, i) => ({
+    id: `real${i}`,
+    title: "重复",
+    projectId: "i",
+    status: 2,
+    createdTime: t.createdTime,
+    get completedTime() {
+      reads++;
+      return t.completedTime;
+    },
+  }));
+  const engine: EngineApi = {
+    loadSnapshot: async () =>
+      ({
+        projects: [],
+        inboxId: "i",
+        openTasksByProject: new Map(),
+        projectIdByTaskId: new Map(),
+      }) as any,
+    loadHistory: async () => ({ records, gaps: [] }),
+    fetchCompletedTasksInWindow: async () => [],
+    attachmentsFromTaskRecord: () => [],
+    downloadAttachmentBytes: async () => new Uint8Array(),
+  };
+  const { scanAttachments } = await import("../lib/enrich.js");
+  const result = await scanAttachments(csv, engine);
+  assert.equal(result.apiTaskIds.size, 3000);
+  assert.equal(result.gaps.length, 0);
+  assert.ok(reads < 30000, `completion reads: ${reads}`);
+});

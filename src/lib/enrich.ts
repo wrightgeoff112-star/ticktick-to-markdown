@@ -9,6 +9,11 @@ import type { ManifestGap } from "./manifest.js";
 import type { ResolvedAttachment } from "./vault.js";
 export interface EngineApi {
   loadSnapshot(): Promise<EngineSnapshot>;
+  /** Complete metadata already fetched in batches; never downloads attachment bytes. */
+  loadHistory?(
+    snapshot: EngineSnapshot,
+    tasks: readonly CsvTask[],
+  ): Promise<{ records: RawRecord[]; gaps: ManifestGap[] }>;
   fetchProjectTasks?(
     snapshot: EngineSnapshot,
     projectId: string,
@@ -62,38 +67,107 @@ function instant(value: unknown): number | null {
   const n = typeof value === "string" ? Date.parse(value) : NaN;
   return Number.isFinite(n) ? n : null;
 }
-function choose(
-  task: CsvTask,
-  records: RawRecord[],
-  engine: EngineApi,
-  snapshot: EngineSnapshot,
-): RawRecord[] {
-  const real = records.filter((r) => r.id === task.sourceTaskId);
-  if (real.length) return real;
-  const refs = task.attachmentRefs;
-  if (refs.length) {
-    const hits = records.filter((r) =>
-      engine
-        .attachmentsFromTaskRecord(snapshot, r)
-        .some((a) => refs.some((ref) => ref.split(/[/?#]/).includes(a.id))),
-    );
-    if (hits.length) return hits;
-  }
-  let hits = records.filter(
-    (r) => String(r.title ?? "").trim() === task.title.trim(),
-  );
-  for (const [csvTime, field] of [
-    [task.createdTime, "createdTime"],
-    [task.completedTime, "completedTime"],
-  ] as const) {
-    if (csvTime) {
-      const time = instant(csvTime);
-      hits = hits.filter(
-        (r) => instant(r[field]) === null || instant(r[field]) === time,
-      );
+interface TitleRecords {
+  records: RawRecord[];
+  created: Map<number | null, RawRecord[]>;
+  completed: Map<number | null, RawRecord[]>;
+  both: Map<string, RawRecord[]>;
+}
+class RecordIndex {
+  private ids = new Map<string, RawRecord>();
+  private titles = new Map<string, TitleRecords>();
+  private attachments = new Map<string, RawRecord[]>();
+  constructor(
+    records: RawRecord[],
+    engine: EngineApi,
+    snapshot: EngineSnapshot,
+  ) {
+    for (const record of records)
+      if (typeof record.id === "string") this.ids.set(record.id, record);
+    for (const record of this.ids.values()) {
+      const title = String(record.title ?? "").trim();
+      let bucket = this.titles.get(title);
+      if (!bucket) {
+        bucket = {
+          records: [],
+          created: new Map(),
+          completed: new Map(),
+          both: new Map(),
+        };
+        this.titles.set(title, bucket);
+      }
+      bucket.records.push(record);
+      for (const [map, field] of [
+        [bucket.created, "createdTime"],
+        [bucket.completed, "completedTime"],
+      ] as const) {
+        const time = instant(record[field]),
+          rows = map.get(time) ?? [];
+        rows.push(record);
+        map.set(time, rows);
+      }
+      const key = `${instant(record.createdTime)}/${instant(record.completedTime)}`;
+      const sameTimes = bucket.both.get(key) ?? [];
+      sameTimes.push(record);
+      bucket.both.set(key, sameTimes);
+      for (const attachment of engine.attachmentsFromTaskRecord(
+        snapshot,
+        record,
+      )) {
+        const rows = this.attachments.get(attachment.id) ?? [];
+        rows.push(record);
+        this.attachments.set(attachment.id, rows);
+      }
     }
   }
-  return hits;
+  id(id: string | null) {
+    return id ? this.ids.get(id) : undefined;
+  }
+  refs(refs: string[]) {
+    return refs.flatMap((ref) =>
+      ref.split(/[/?#]/).flatMap((id) => this.attachments.get(id) ?? []),
+    );
+  }
+  title(task: CsvTask) {
+    const bucket = this.titles.get(task.title.trim());
+    if (!bucket) return [];
+    const created = instant(task.createdTime),
+      completed = instant(task.completedTime);
+    // Two distinct candidates already prove ambiguity. Avoid quadratic same-title scans.
+    if (created !== null && completed !== null)
+      return [
+        `${created}/${completed}`,
+        `null/${completed}`,
+        `${created}/null`,
+        "null/null",
+      ]
+        .flatMap((key) => (bucket.both.get(key) ?? []).slice(0, 2))
+        .slice(0, 2);
+    if (created !== null)
+      return [
+        ...(bucket.created.get(created) ?? []).slice(0, 2),
+        ...(bucket.created.get(null) ?? []).slice(0, 2),
+      ].slice(0, 2);
+    if (completed !== null)
+      return [
+        ...(bucket.completed.get(completed) ?? []).slice(0, 2),
+        ...(bucket.completed.get(null) ?? []).slice(0, 2),
+      ].slice(0, 2);
+    return bucket.records.slice(0, 2);
+  }
+}
+function choose(task: CsvTask, indexes: RecordIndex[]): RawRecord[] {
+  const unique = (rows: RawRecord[]) => [
+    ...new Map(rows.map((r) => [r.id, r])).values(),
+  ];
+  const exact = indexes.flatMap((i) => {
+    const row = i.id(task.sourceTaskId);
+    return row ? [row] : [];
+  });
+  if (exact.length) return unique(exact);
+  const refs = indexes.flatMap((i) => i.refs(task.attachmentRefs));
+  if (refs.length) return unique(refs);
+  return unique(indexes.flatMap((i) => i.title(task)));
 }
 export async function scanAttachments(
   csv: CsvParseResult,
@@ -102,46 +176,102 @@ export async function scanAttachments(
 ): Promise<AttachmentScan> {
   const log = options.onProgress ?? (() => {});
   const apiTaskIds = new Map<string, string>(options.previous?.apiTaskIds);
-  const gaps: ManifestGap[] = [];
-  const pending: AttachmentCandidate[] = [];
+  const gaps: ManifestGap[] = [],
+    pending: AttachmentCandidate[] = [];
   const result: AttachmentScan = { entries: pending, apiTaskIds, gaps };
   const canceled = () => {
-    if (options.signal?.aborted) {
-      if (!gaps.some((g) => g.code === "export_canceled"))
-        gaps.push({
-          code: "export_canceled",
-          message: "已取消，附件扫描或下载未完成。",
-        });
-      return true;
-    }
-    return false;
+    if (!options.signal?.aborted) return false;
+    if (!gaps.some((g) => g.code === "export_canceled"))
+      gaps.push({
+        code: "export_canceled",
+        message: "附件扫描已取消，覆盖尚未核实。",
+      });
+    return true;
   };
-  log("正在连接账号、枚举项目…");
+  if (canceled()) return result;
+  log("正在连接账号、枚举清单…");
   let snapshot: EngineSnapshot;
   try {
     snapshot = await engine.loadSnapshot();
   } catch {
     gaps.push({
       code: "image_engine_failed",
-      message: "无法连接附件接口。请检查登录状态并重试；附件覆盖尚未核实。",
+      message: "无法连接附件接口，请检查登录状态；附件覆盖尚未核实。",
     });
     return result;
   }
-  const titles = new Map(csv.lists.map((l) => [l.id, l.title]));
   result.snapshot = snapshot;
-  const windows = new Map<string, Promise<RawRecord[]>>();
-  const projectTasks = new Map<string, Promise<RawRecord[]>>();
-  for (const task of csv.tasks) {
+  const group = (rows: RawRecord[]) => {
+    const grouped = new Map<string, RawRecord[]>();
+    for (const row of rows)
+      if (typeof row.projectId === "string") {
+        const list = grouped.get(row.projectId) ?? [];
+        list.push(row);
+        grouped.set(row.projectId, list);
+      }
+    return new Map(
+      [...grouped].map(([id, rows]) => [
+        id,
+        new RecordIndex(rows, engine, snapshot),
+      ]),
+    );
+  };
+  const open = group(
+    [...snapshot.openTasksByProject.values()]
+      .flat()
+      .filter((r) => Number(r.status ?? 0) === 0),
+  );
+  const history = new Map<string, Map<string, RecordIndex>>();
+  const historyProjects = new Map<string, string>();
+  if (engine.loadHistory && csv.tasks.some((t) => t.status !== "todo")) {
+    try {
+      const loaded = await engine.loadHistory(snapshot, csv.tasks);
+      gaps.push(...loaded.gaps);
+      for (const row of loaded.records)
+        if (typeof row.id === "string" && typeof row.projectId === "string")
+          historyProjects.set(row.id, row.projectId);
+      history.set(
+        "done",
+        group(loaded.records.filter((r) => Number(r.status) === 2)),
+      );
+      history.set(
+        "canceled",
+        group(loaded.records.filter((r) => Number(r.status) === -1)),
+      );
+    } catch (error) {
+      if (canceled()) return result;
+      gaps.push({
+        code: "completed_scan_incomplete",
+        message: `历史附件信息未完整读取：${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+  const titles = new Map(csv.lists.map((l) => [l.id, l.title]));
+  const projectsByName = new Map<string, string[]>();
+  for (const project of snapshot.projects) {
+    const name = project.name.trim(),
+      ids = projectsByName.get(name) ?? [];
+    ids.push(project.id);
+    projectsByName.set(name, ids);
+  }
+  const windows = new Map<string, Promise<Map<string, RecordIndex>>>();
+  const projectTasks = new Map<string, Promise<Map<string, RecordIndex>>>();
+  for (let taskIndex = 0; taskIndex < csv.tasks.length; taskIndex++) {
+    // Yield periodically so cancellation, progress rendering and the time budget can run.
+    if (taskIndex && taskIndex % 250 === 0)
+      await new Promise((resolve) => setTimeout(resolve, 0));
     if (canceled()) return result;
+    const task = csv.tasks[taskIndex]!;
     const listName = task.listId ? titles.get(task.listId) : undefined;
-    const inbox = !listName || /^(Inbox|收集箱)$/i.test(listName.trim());
-    const projects = snapshot.projectIdByTaskId.has(task.sourceTaskId ?? "")
-      ? [snapshot.projectIdByTaskId.get(task.sourceTaskId ?? "")!]
-      : inbox && snapshot.inboxId
+    const knownProject =
+      snapshot.projectIdByTaskId.get(task.sourceTaskId ?? "") ??
+      historyProjects.get(task.sourceTaskId ?? "");
+    const projects = knownProject
+      ? [knownProject]
+      : (!listName || /^(Inbox|收集箱)$/i.test(listName.trim())) &&
+          snapshot.inboxId
         ? [snapshot.inboxId]
-        : snapshot.projects
-            .filter((p) => p.name.trim() === listName?.trim())
-            .map((p) => p.id);
+        : (projectsByName.get(listName?.trim() ?? "") ?? []);
     if (!projects.length) {
       gaps.push({
         code: "task_attachment_unreachable",
@@ -150,87 +280,84 @@ export async function scanAttachments(
       });
       continue;
     }
-    const records = new Map<string, RawRecord>();
+    const indexes: RecordIndex[] = [];
     for (const projectId of projects) {
-      for (const r of snapshot.openTasksByProject.get(projectId) ?? [])
+      if (task.status === "todo") {
+        const index = open.get(projectId);
+        if (index) indexes.push(index);
+      } else if (engine.loadHistory) {
+        const index = history.get(task.status)?.get(projectId);
+        if (index) indexes.push(index);
+      } else {
         if (
-          typeof r.id === "string" &&
-          task.status === "todo" &&
-          Number(r.status ?? 0) === 0
-        )
-          records.set(r.id, r);
-      // Always scan completed records for done/canceled tasks: an open same-name record is not evidence of identity.
-      if (task.status !== "todo") {
-        if (!task.completedTime) {
+          !task.completedTime ||
+          !Number.isFinite(Date.parse(task.completedTime))
+        ) {
           gaps.push({
             code: "completed_scan_incomplete",
             taskId: task.id,
-            message: `任务「${task.title}」缺少完成时间，无法证明历史附件覆盖。`,
+            message: `任务「${task.title}」缺少完成时间，历史附件未核实。`,
           });
           continue;
         }
-        const bucketWidth = 14 * 24 * 3600000;
-        const bucket = Math.floor(Date.parse(task.completedTime) / bucketWidth);
-        const center = new Date(
-          bucket * bucketWidth + bucketWidth / 2,
-        ).toISOString();
+        const width = 14 * 86400000,
+          bucket = Math.floor(Date.parse(task.completedTime) / width);
         const key = `${task.status === "canceled" ? "all" : projectId}:${task.status}:${bucket}`;
         if (!windows.has(key))
           windows.set(
             key,
-            engine.fetchCompletedTasksInWindow(
-              snapshot,
-              projectId,
-              center,
-              task.status === "canceled"
-                ? { status: "Abandoned", global: true }
-                : {},
-            ),
+            engine
+              .fetchCompletedTasksInWindow(
+                snapshot,
+                projectId,
+                new Date(bucket * width + width / 2).toISOString(),
+                task.status === "canceled"
+                  ? { status: "Abandoned", global: true }
+                  : {},
+              )
+              .then(group),
           );
         try {
-          for (const r of await windows.get(key)!) {
-            if (r.projectId === projectId && typeof r.id === "string")
-              records.set(r.id, r);
-          }
+          const index = (await windows.get(key)!).get(projectId);
+          if (index) indexes.push(index);
         } catch {
           gaps.push({
             code: "completed_scan_incomplete",
             taskId: task.id,
-            message: `任务「${task.title}」的历史窗口扫描失败或未取全，请重试。`,
+            message: `任务「${task.title}」历史查询未完整完成。`,
           });
         }
       }
     }
-    let candidates = choose(task, [...records.values()], engine, snapshot);
+    let candidates = choose(task, indexes);
     if (
       task.status === "todo" &&
-      candidates.length === 0 &&
+      !candidates.length &&
       engine.fetchProjectTasks
     ) {
+      const fallback: RecordIndex[] = [];
       for (const projectId of projects) {
         if (!projectTasks.has(projectId))
           projectTasks.set(
             projectId,
-            engine.fetchProjectTasks(snapshot, projectId),
+            engine
+              .fetchProjectTasks(snapshot, projectId)
+              .then((rows) =>
+                group(rows.filter((r) => Number(r.status ?? 0) === 0)),
+              ),
           );
         try {
-          for (const r of await projectTasks.get(projectId)!) {
-            if (
-              r.projectId === projectId &&
-              typeof r.id === "string" &&
-              Number(r.status ?? 0) === 0
-            )
-              records.set(r.id, r);
-          }
+          const index = (await projectTasks.get(projectId)!).get(projectId);
+          if (index) fallback.push(index);
         } catch {
           gaps.push({
             code: "task_attachment_unreachable",
             taskId: task.id,
-            message: `任务「${task.title}」所在清单扫描失败，附件未核实。`,
+            message: `任务「${task.title}」所在清单读取失败，附件未核实。`,
           });
         }
       }
-      candidates = choose(task, [...records.values()], engine, snapshot);
+      candidates = choose(task, [...indexes, ...fallback]);
     }
     if (candidates.length !== 1) {
       gaps.push({
@@ -255,7 +382,7 @@ export async function scanAttachments(
       gaps.push({
         code: "task_attachment_unreachable",
         taskId: task.id,
-        message: `任务「${task.title}」的附件元数据不完整，无法证明全部附件覆盖。`,
+        message: `任务「${task.title}」的附件信息不完整。`,
       });
     if (!metas.length && task.attachmentRefs.length)
       gaps.push({
@@ -265,7 +392,8 @@ export async function scanAttachments(
       });
     for (const meta of metas)
       pending.push({ task, meta, key: attachmentKey(task, meta) });
-    log(`扫描任务:${apiTaskIds.size}/${csv.tasks.length}`);
+    if (taskIndex % 100 === 0 || taskIndex === csv.tasks.length - 1)
+      log(`扫描任务:${apiTaskIds.size}/${csv.tasks.length}`);
   }
   return result;
 }

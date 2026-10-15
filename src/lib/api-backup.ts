@@ -1,12 +1,9 @@
+import { scanHistory } from "./history-scan.js";
 /** Read-only backup when the official CSV generator is temporarily unavailable.
  * Preserve raw API records; never label this output as an official CSV.
  */
 import type { CsvFolder, CsvList, CsvParseResult, CsvTask } from "./csv.js";
-import {
-  fetchCompletedWindowComplete,
-  parseProjectTasksResponse,
-  type RawRecord,
-} from "./image-api.js";
+import { parseProjectTasksResponse, type RawRecord } from "./image-api.js";
 import type { ManifestGap } from "./manifest.js";
 import { parseDidaRepeatRule } from "./recurrence.js";
 import { parseDidaReminderRules } from "./reminder-rules.js";
@@ -88,6 +85,7 @@ function tasksFromRecords(records: RawRecord[], lists: CsvList[]): CsvTask[] {
 export async function readApiBackup(
   request: (path: string) => Promise<unknown>,
   onProgress: (message: string) => void = () => {},
+  signal?: AbortSignal,
 ): Promise<ApiBackup> {
   const response = await request("/api/v2/batch/check/0");
   if (!response || typeof response !== "object")
@@ -128,6 +126,7 @@ export async function readApiBackup(
   add(bean!.update as RawRecord[]);
   // Batch has active inbox tasks; every project is read explicitly to include archived lists.
   for (const profile of profiles) {
+    if (signal?.aborted) throw signal.reason;
     onProgress(`正在读取清单：${profile.name}`);
     try {
       add(
@@ -144,31 +143,14 @@ export async function readApiBackup(
       });
     }
   }
-  const from = 0,
-    to = Date.now() + 86400000;
-  const center = new Date((from + to) / 2).toISOString(),
-    windowHours = (to - from) / 2 / 3600000;
-  for (const status of [undefined, "Abandoned"] as const) {
-    onProgress(status ? "正在读取已放弃任务…" : "正在读取完整历史任务…");
-    try {
-      add(
-        await fetchCompletedWindowComplete(
-          "all",
-          center,
-          { global: true, windowHours, ...(status ? { status } : {}) },
-          request,
-        ),
-      );
-    } catch (error) {
-      gaps.push({
-        code: "completed_scan_incomplete",
-        message: `${status ? "已放弃" : "已完成"}历史未完整读取：${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-  }
+  const history = await scanHistory(undefined, request, { signal, onProgress });
+  add(history.records);
+  gaps.push(...history.gaps);
   const all = [...records.values()];
+  const listIds = new Set(lists.map((l) => l.id));
   for (const r of all)
-    if (!lists.some((l) => l.id === r.projectId)) {
+    if (!listIds.has(string(r.projectId))) {
+      listIds.add(string(r.projectId));
       lists.push({
         id: string(r.projectId),
         title: `清单 ${r.projectId}`,

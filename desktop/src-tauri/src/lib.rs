@@ -54,6 +54,7 @@ fn diagnostic(app: &tauri::AppHandle, event: &str) {
 }
 struct ExportState {
     device_id: String,
+    client: Result<reqwest::Client, String>,
     host: Mutex<Option<String>>,
     temp: Mutex<Option<tempfile::TempDir>>,
     handles: Mutex<HashMap<String, PathBuf>>,
@@ -65,6 +66,10 @@ impl Default for ExportState {
     fn default() -> Self {
         Self {
             device_id: uuid::Uuid::new_v4().simple().to_string(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(120))
+                .build().map_err(|_| "网络初始化失败".to_string()),
             host: Mutex::new(None),
             temp: Mutex::new(None),
             handles: Mutex::new(HashMap::new()),
@@ -211,7 +216,7 @@ fn api_path(path: &str) -> bool {
         && url.query_pairs().all(|(k, v)| match k.as_ref() {
             "projectId" => id(&v),
             "from" | "to" => v.len() <= 32,
-            "status" => v == "Abandoned" && p.ends_with("/closed"),
+            "status" => matches!(v.as_ref(), "Completed" | "Abandoned") && p.ends_with("/closed"),
             "limit" => v.parse::<u32>().is_ok_and(|n| n <= 1000),
             _ => false,
         })
@@ -313,19 +318,28 @@ async fn request(
         .map(|c| format!("{}={}", c.name(), c.value()))
         .collect::<Vec<_>>()
         .join("; ");
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|_| "网络初始化失败")?;
+    let client = state.client.as_ref().map_err(Clone::clone)?;
     let mut req=client.get(format!("https://api.{domain}{path}")).header("Cookie",cookie).header("Referer",format!("https://{domain}/")).header("Hl",if domain=="dida365.com" {"zh_CN"} else {"en_US"}).header("X-Tz","Asia/Shanghai").header("Traceid",uuid::Uuid::new_v4().simple().to_string()).header("X-Requested-With","XMLHttpRequest").header("X-Device",serde_json::json!({"platform":"web","os":if cfg!(target_os="windows") {"Win32"} else {"MacIntel"},"device":"ticktick-export","name":"ticktick-export","version":1,"id":state.device_id,"channel":"website","campaign":"","websocket":""}).to_string());
     if let Some(csrf) = cookies.iter().find(|c| c.name() == "_csrf_token") {
         req = req.header("X-Csrftoken", csrf.value());
     }
-    let response = tokio::select! {
-        biased;
-        _ = cancellation.wait() => return Err("导出已取消".into()),
-        result = req.send() => result.map_err(|error| if error.is_timeout() { diagnostic(app, "error=network_timeout"); "官方接口超时，请重试" } else if error.is_connect() { diagnostic(app, "error=network_connect"); "无法连接官方接口，请检查网络或代理" } else { diagnostic(app, "error=network_other"); "网络请求失败，请重试" })?,
+    let mut attempt = 0;
+    let response = loop {
+        let pending = req.try_clone().ok_or("无法重试官方请求")?;
+        let response = tokio::select! {
+            biased;
+            _ = cancellation.wait() => return Err("导出已取消".into()),
+            result = pending.send() => result.map_err(|error| if error.is_timeout() { diagnostic(app, "error=network_timeout"); "官方接口超时，请重试" } else if error.is_connect() { diagnostic(app, "error=network_connect"); "无法连接官方接口，请检查网络或代理" } else { diagnostic(app, "error=network_other"); "网络请求失败，请重试" })?,
+        };
+        let delay = retry_delay(response.status().as_u16(), response.headers().get("retry-after").and_then(|v| v.to_str().ok()), attempt);
+        let Some(delay) = delay else { break response; };
+        drop(response);
+        attempt += 1;
+        tokio::select! {
+            biased;
+            _ = cancellation.wait() => return Err("导出已取消".into()),
+            _ = tokio::time::sleep(delay) => {},
+        }
     };
     diagnostic(
         app,
@@ -661,6 +675,25 @@ fn reveal_export(window: WebviewWindow, state: State<'_, ExportState>) -> Result
     result.map_err(|_| "无法打开文件夹，请按上方路径查找备份")?;
     Ok(())
 }
+fn retry_delay(status: u16, retry_after: Option<&str>, attempt: u32) -> Option<std::time::Duration> {
+    if !matches!(status, 429 | 503) || attempt >= 2 { return None; }
+    // A long/date-valued Retry-After is reported to the user instead of retried early.
+    let seconds = match retry_after {
+        Some(value) => value.parse::<u64>().ok()?,
+        None => 1 << attempt,
+    };
+    if seconds > 30 { return None; }
+    Some(std::time::Duration::from_secs(seconds.max(1)))
+}
+fn io_error(stage: &str, error: &std::io::Error) -> String {
+    format!("{stage}：{:?}；OS={}；{error}", error.kind(), error.raw_os_error().map(|n| n.to_string()).unwrap_or_else(|| "none".into()))
+}
+fn zip_error(stage: &str, error: zip::result::ZipError) -> String {
+    match error {
+        zip::result::ZipError::Io(error) => io_error(stage, &error),
+        other => format!("{stage}：{other}"),
+    }
+}
 fn write_archive(
     target: &std::path::Path,
     files: Vec<TextFile>,
@@ -669,7 +702,7 @@ fn write_archive(
 ) -> Result<(), String> {
     // Stream into an adjacent temporary file; only replace the selected destination once complete.
     let mut temporary = tempfile::NamedTempFile::new_in(target.parent().ok_or("保存目录无效")?)
-        .map_err(|_| "无法创建保存文件")?;
+        .map_err(|error| io_error("无法创建保存文件", &error))?;
     let mut zip = zip::ZipWriter::new(temporary.as_file_mut());
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -678,31 +711,31 @@ fn write_archive(
             return Err("导出已取消".into());
         }
         zip.start_file(f.path, options)
-            .map_err(|_| "ZIP 写入失败")?;
+            .map_err(|error| zip_error("ZIP 写入失败", error))?;
         zip.write_all(f.content.as_bytes())
-            .map_err(|_| "磁盘写入失败")?;
+            .map_err(|error| io_error("磁盘写入失败", &error))?;
     }
     let mut buffer = vec![0u8; 128 * 1024];
     for (name, path) in disk_files {
-        zip.start_file(name, options).map_err(|_| "ZIP 写入失败")?;
-        let mut input = std::fs::File::open(path).map_err(|_| "临时附件不存在")?;
+        zip.start_file(name, options).map_err(|error| zip_error("ZIP 写入失败", error))?;
+        let mut input = std::fs::File::open(path).map_err(|error| io_error("临时附件不存在", &error))?;
         loop {
             if cancelled.load(Ordering::Relaxed) {
                 return Err("导出已取消".into());
             }
-            let n = input.read(&mut buffer).map_err(|_| "附件读取失败")?;
+            let n = input.read(&mut buffer).map_err(|error| io_error("附件读取失败", &error))?;
             if n == 0 {
                 break;
             }
-            zip.write_all(&buffer[..n]).map_err(|_| "磁盘写入失败")?;
+            zip.write_all(&buffer[..n]).map_err(|error| io_error("磁盘写入失败", &error))?;
         }
     }
-    zip.finish().map_err(|_| "ZIP 完成失败")?;
-    temporary.as_file().sync_all().map_err(|_| "保存同步失败")?;
+    zip.finish().map_err(|error| zip_error("ZIP 完成失败", error))?;
+    temporary.as_file().sync_all().map_err(|error| io_error("保存同步失败", &error))?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("导出已取消".into());
     }
-    temporary.persist(&target).map_err(|_| "无法保存 ZIP")?;
+    temporary.persist(&target).map_err(|error| io_error("无法替换目标 ZIP", &error.error))?;
     Ok(())
 }
 #[tauri::command]
@@ -770,6 +803,40 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bulk_history_statuses_and_limits_are_allowed_but_writes_are_not() {
+        assert!(api_path("/api/v2/project/all/closed?status=Completed&limit=600"));
+        assert!(api_path("/api/v2/project/all/closed?status=Abandoned&limit=600"));
+        assert!(!api_path("/api/v2/project/all/closed?status=Deleted&limit=600"));
+        assert!(!api_path("/api/v2/task/a/complete"));
+    }
+    #[test]
+    fn archive_creation_error_preserves_stage_and_os_error() {
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("missing").join("backup.zip");
+        let message = write_archive(&target, vec![], vec![], &AtomicBool::new(false)).unwrap_err();
+        assert!(message.contains("创建保存文件"));
+        assert!(message.contains("NotFound"), "{message}");
+        assert!(message.contains("OS"), "{message}");
+    }
+    #[test]
+    fn failed_archive_commit_keeps_previous_destination() {
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("backup.zip");
+        std::fs::write(&target, b"previous backup").unwrap();
+        let message = write_archive(&target, vec![], vec![("attachments/a".into(),folder.path().join("missing"))], &AtomicBool::new(false)).unwrap_err();
+        assert!(message.contains("附件"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"previous backup");
+    }
+    #[test]
+    fn rate_limit_backoff_is_bounded_and_respects_retry_after() {
+        assert_eq!(retry_delay(429, None, 0).unwrap().as_secs(), 1);
+        assert_eq!(retry_delay(503, Some("12"), 1).unwrap().as_secs(), 12);
+        assert!(retry_delay(503, None, 2).is_none());
+        assert!(retry_delay(401, None, 0).is_none());
+        assert!(retry_delay(429, Some("3600"), 0).is_none());
+        assert!(retry_delay(503, Some("Thu, 15 Oct 2026 00:00:00 GMT"), 0).is_none());
+    }
     #[test]
     fn backup_quota_error_is_readable_and_machine_recognizable() {
         let message = api_error_message(500, r#"{"errorCode":"export_too_many_times"}"#);
